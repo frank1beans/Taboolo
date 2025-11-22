@@ -1,0 +1,15 @@
+.ag-theme-alpine .ag-cell,
+.ag-theme-alpine-dark .ag-cell {
+  white-space: pre-wrap;
+}
+
+/* Fix dark mode colors (library defaults are too dark for our background) */
+.ag-theme-alpine-dark {
+  --ag-foreground-color: #e5e7eb;
+  --ag-data-color: #e5e7eb;
+  --ag-secondary-foreground-color: #cbd5e1;
+  --ag-header-foreground-color: #e5e7eb;
+  --ag-border-color: #1f2937;
+  --ag-background-color: #0b1324;
+  --ag-header-background-color: #0f172a;
+}

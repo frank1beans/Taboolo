@@ -1,0 +1,145 @@
+# =====================
+# Environment & Secrets
+# =====================
+*.env
+.env.*
+!.env.example
+*.local
+
+# =====================
+# Dependencies
+# =====================
+node_modules/
+.pnpm-store/
+
+# =====================
+# Build outputs
+# =====================
+dist/
+dist-ssr/
+build/
+out/
+.next/
+.nuxt/
+
+# =====================
+# Python
+# =====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+backend/.venv/
+backend/venv/
+
+# =====================
+# Testing & Coverage
+# =====================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# =====================
+# Database
+# =====================
+*.sqlite
+*.sqlite3
+*.db
+backend/storage/
+
+# =====================
+# Storage & Uploads
+# =====================
+storage/
+uploads/
+temp/
+tmp/
+
+# =====================
+# ML/AI Models & Cache
+# =====================
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.onnx
+*.faiss
+.cache/
+backend/roBERT/
+
+# =====================
+# Logs
+# =====================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =====================
+# IDE & Editors
+# =====================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*.sw?
+*.sublime-project
+*.sublime-workspace
+
+# =====================
+# OS Files
+# =====================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# =====================
+# Windows
+# =====================
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.user
+
+# =====================
+# Misc
+# =====================
+.claude/
+*.bak
+*.tmp
+*.temp
+.ipynb_checkpoints/
+ignore
