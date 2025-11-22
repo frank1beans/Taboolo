@@ -655,7 +655,7 @@ def _extract_stratigrafia(original_text: str) -> Optional[str]:
     """
     if not original_text:
         return None
-    key_re = re.compile(r"(lastr|pannell|cartongesso|plasterboard|orditura)", flags=re.IGNORECASE)
+    key_re = re.compile(r"(lastr|pannell|cartongesso|plasterboard|orditura|isolant)", flags=re.IGNORECASE)
     max_len = 320  # evita di prendere l'intera descrizione
 
     def _add_unique(seq: list[str], value: str) -> None:
@@ -663,21 +663,57 @@ def _extract_stratigrafia(original_text: str) -> Optional[str]:
             seq.append(value)
 
     hits: List[str] = []
-    chunks = re.split(r"[;\n\r•]+", original_text)
-    if len(chunks) <= 1:
-        chunks = re.split(r"[.]", original_text)
 
-    for chunk in chunks:
-        part = chunk.strip(" -•")
-        if not part:
+    # Priorità: linee bullet/spacchettate che contengono keyword
+    bullet_lines: list[str] = []
+    for raw_line in re.split(r"[\n\r]+", original_text):
+        line = raw_line.strip(" -•\t")
+        if not line:
             continue
-        if key_re.search(part):
-            if len(part) <= max_len or part.lower().lstrip().startswith(("lastra", "idrolastra", "pannello", "cartongesso")):
-                _add_unique(hits, part.strip())
+        if key_re.search(line):
+            bullet_lines.append(line)
+
+    # Se abbiamo linee bullet, usiamo solo quelle
+    if bullet_lines:
+        for line in bullet_lines:
+            if len(line) <= max_len or line.lower().lstrip().startswith(
+                ("lastra", "idrolastra", "pannello", "cartongesso", "orditura", "isolante")
+            ):
+                _add_unique(hits, line)
+    else:
+        # Split su vari separatori
+        chunks = re.split(r"[;\n\r•]+", original_text)
+        if len(chunks) <= 1:
+            chunks = re.split(r"[.]", original_text)
+        # supporto per bullet con trattino "- "
+        for line in re.split(r"[\n\r]+", original_text):
+            for part in re.split(r"^\s*-\s+", line.strip()):
+                if part:
+                    chunks.append(part)
+        # split aggiuntivo su ":" per estrarre liste dopo descrizioni lunghe
+        more_chunks: list[str] = []
+        for c in chunks:
+            more_chunks.extend(re.split(r":", c))
+        if more_chunks:
+            chunks.extend(more_chunks)
+
+        for chunk in chunks:
+            part = chunk.strip(" -•")
+            if not part:
+                continue
+            if key_re.search(part):
+                if len(part) <= max_len or part.lower().lstrip().startswith(
+                    ("lastra", "idrolastra", "pannello", "cartongesso", "orditura", "isolante")
+                ):
+                    _add_unique(hits, part.strip())
 
     # Fallback: cattura span inline tra separatori se nulla trovato
     if not hits:
-        for m in re.finditer(r"[^;.\n\r•]*?(lastr|pannell|cartongesso|plasterboard|orditura)[^;.\n\r•]*", original_text, flags=re.IGNORECASE):
+        for m in re.finditer(
+            r"[^;.\n\r•]*?(lastr|pannell|cartongesso|plasterboard|orditura|isolant)[^;.\n\r•]*",
+            original_text,
+            flags=re.IGNORECASE,
+        ):
             span = m.group(0).strip(" ;\n\r•-.")
             if span and len(span) <= max_len:
                 _add_unique(hits, span)
