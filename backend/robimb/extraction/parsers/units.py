@@ -27,6 +27,11 @@ _CANONICAL_UNITS = {
         "metro",
         "metri",
     },
+    "kg/m": {
+        "kg/m",
+        "kgm",
+        "kg / m",
+    },
     "m2": {
         "m2",
         "m^2",
@@ -35,6 +40,9 @@ _CANONICAL_UNITS = {
         "metroquadro",
         "metriquadrati",
         "metri_quadrati",
+        "metri quadrati",
+        "metri quadri",
+        "metri quad.",
     },
     "m3": {
         "m3",
@@ -43,6 +51,7 @@ _CANONICAL_UNITS = {
         "mc",
         "metricubi",
         "metri_cubi",
+        "metri cubi",
     },
     "kn/m2": {
         "kn/m2",
@@ -54,12 +63,44 @@ _CANONICAL_UNITS = {
         "kilonewton/m2",
         "kilonewton/mq",
     },
+    "kg/m3": {
+        "kg/m3",
+        "kg/m^3",
+        "kg/m³",
+        "kgm3",
+        "kgm^3",
+        "kgm³",
+        "kg/mc",
+        "kgmc",
+    },
     "kg/m2": {
         "kg/m2",
         "kg/mq",
         "kgm2",
         "kgmq",
         "kg/m²",
+    },
+    "w/m2k": {
+        "w/m2k",
+        "w/m²k",
+        "w / m2k",
+        "w / m²k",
+        "w m2 k",
+        "w m² k",
+    },
+    "w/mk": {
+        "w/mk",
+        "w / mk",
+        "w m k",
+        "lambda",
+        "λ",
+    },
+    "l/min": {
+        "l/min",
+        "l / min",
+        "lmin",
+        "litri/min",
+        "litro/min",
     },
     "%": {
         "%",
@@ -75,17 +116,44 @@ _CANONICAL_UNITS = {
 
 _SUPERSCRIPTS = str.maketrans({"²": "2", "³": "3", "㎜": "mm", "㎝": "cm"})
 
-_UNIT_PATTERN = re.compile(
-    r"\b(?:(?:k|m|c)?(?:n|g)?/?m[²2]?|m³|m3|mq|mc|mm|cm|kn/mq|kg/mq|percento|percentuale|db|dB|decibel|㎜|㎝)\b|%",
-    flags=re.IGNORECASE,
-)
+
+def _normalize_token(token: str) -> str:
+    """Lowercase token and strip spaces/underscores/dots after unrolling superscripts."""
+    cleaned = token.translate(_SUPERSCRIPTS).lower()
+    cleaned = cleaned.replace("/ ", "/").replace(" /", "/")
+    cleaned = re.sub(r"[\s_.]+", "", cleaned)
+    return cleaned
 
 
-def _sanitize(token: str) -> str:
-    cleaned = token.translate(_SUPERSCRIPTS)
-    cleaned = cleaned.replace("/ ", "/")
-    cleaned = re.sub(r"\s+", "", cleaned)
-    return cleaned.lower()
+_NORMALIZED_ALIASES = {
+    canonical: {_normalize_token(alias) for alias in aliases}
+    for canonical, aliases in _CANONICAL_UNITS.items()
+}
+
+
+def _alias_to_regex(alias: str) -> str:
+    """
+    Build a regex that matches the alias allowing optional whitespace around slashes
+    and treating underscores as optional separators.
+    """
+    escaped = re.escape(alias.strip())
+    escaped = escaped.replace(r"\ ", r"\s*")
+    escaped = escaped.replace(r"\_", r"[_\s]*")
+    escaped = re.sub(r"\\/", r"\\s*/\\s*", escaped)
+    return escaped
+
+
+def _build_unit_pattern() -> re.Pattern[str]:
+    variants: set[str] = set()
+    for aliases in _CANONICAL_UNITS.values():
+        for alias in aliases:
+            variants.add(_alias_to_regex(alias))
+    pattern_body = "|".join(sorted(variants, key=len, reverse=True))
+    # Avoid matching inside longer alphabetic/numeric tokens but allow adjacency to numbers on the left.
+    return re.compile(rf"(?<![A-Za-z])(?:{pattern_body})(?![A-Za-z0-9^])", flags=re.IGNORECASE)
+
+
+_UNIT_PATTERN = _build_unit_pattern()
 
 
 def normalize_unit(token: Optional[str]) -> Optional[str]:
@@ -93,9 +161,9 @@ def normalize_unit(token: Optional[str]) -> Optional[str]:
 
     if token is None:
         return None
-    cleaned = _sanitize(token)
-    for canonical, aliases in _CANONICAL_UNITS.items():
-        if cleaned in {alias.lower().replace(" ", "") for alias in aliases}:
+    cleaned = _normalize_token(token)
+    for canonical, aliases in _NORMALIZED_ALIASES.items():
+        if cleaned in aliases:
             return canonical
     return None
 

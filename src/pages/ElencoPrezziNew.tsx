@@ -888,16 +888,6 @@ export default function ElencoPrezziNew() {
           valueFormatter: (params) =>
             params.value != null ? formatCurrency(params.value) : "-",
         },
-        {
-          field: "project_quantity",
-          headerName: "Q.tà progetto",
-          width: 150,
-          type: "numericColumn",
-          cellClass: "font-mono text-sm",
-          headerClass: "text-right font-semibold",
-          valueFormatter: (params) =>
-            params.value != null ? Number(params.value).toLocaleString("it-IT") : "-",
-        },
       ],
     });
 

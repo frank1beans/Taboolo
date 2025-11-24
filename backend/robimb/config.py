@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - PyYAML is optional at runtime
 
 __all__ = ["ResourcePaths", "get_settings", "reset_settings"]
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _CONFIG_CACHE: Optional["ResourcePaths"] = None
 _CONFIG_SOURCE: Optional[Path] = None
 
@@ -158,20 +158,20 @@ def _build_paths(config_file: Optional[Path]) -> ResourcePaths:
         base=config_dir,
     ) or (lexicon_dir / "brands.json").resolve()
 
-    brand_legacy = _normalize_path(
-        env.get("ROBIMB_BRANDS_LEGACY_PATH") or lexicon_section.get("brands_legacy"),
-        base=config_dir,
-    ) or brand_lexicon.with_suffix(".txt")
-
     materials_lexicon = _normalize_path(
         env.get("ROBIMB_MATERIALS_PATH") or lexicon_section.get("materials"),
         base=config_dir,
     ) or (lexicon_dir / "materials.json").resolve()
 
-    materials_legacy = _normalize_path(
+    brand_lexicon_legacy = _normalize_path(
+        env.get("ROBIMB_BRANDS_LEGACY_PATH") or lexicon_section.get("brands_legacy"),
+        base=config_dir,
+    ) or (lexicon_dir / "brands.txt").resolve()
+
+    materials_lexicon_legacy = _normalize_path(
         env.get("ROBIMB_MATERIALS_LEGACY_PATH") or lexicon_section.get("materials_legacy"),
         base=config_dir,
-    ) or materials_lexicon.with_suffix(".txt")
+    ) or (lexicon_dir / "materials.txt").resolve()
 
     standards_lexicon = _normalize_path(
         env.get("ROBIMB_STANDARDS_PATH") or lexicon_section.get("standards"),
@@ -207,9 +207,9 @@ def _build_paths(config_file: Optional[Path]) -> ResourcePaths:
         lexicon_dir=lexicon_dir,
         prompts_path=prompts_path,
         brand_lexicon=brand_lexicon,
-        brand_lexicon_legacy=brand_legacy,
+        brand_lexicon_legacy=brand_lexicon_legacy,
         materials_lexicon=materials_lexicon,
-        materials_lexicon_legacy=materials_legacy,
+        materials_lexicon_legacy=materials_lexicon_legacy,
         standards_lexicon=standards_lexicon,
         standards_by_category=standards_by_category,
         producers_by_category=producers_by_category,

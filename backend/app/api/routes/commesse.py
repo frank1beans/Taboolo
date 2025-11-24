@@ -1078,6 +1078,14 @@ async def preview_commessa_six(
                 internal_id=opt.internal_id,
                 code=opt.code,
                 description=opt.description,
+                author=opt.author,
+                version=opt.version,
+                date=opt.date,
+                price_list_id=opt.price_list_id,
+                price_list_label=opt.price_list_label,
+                rilevazioni=opt.rilevazioni,
+                items=opt.items,
+                total_importo=opt.total_importo,
             )
             for opt in options
         ]
@@ -1096,6 +1104,8 @@ async def import_commessa_six(
     session: DBSession,
     file: UploadFile = File(...),
     preventivo_id: str | None = Form(default=None),
+    compute_embeddings: bool = Form(default=False),
+    extract_properties: bool = Form(default=False),
 ) -> SixImportReportSchema:
     _ = _get_commessa_or_404(session, commessa_id)
     _ensure_six_or_xml_file(file)
@@ -1109,6 +1119,8 @@ async def import_commessa_six(
             commessa_id,
             saved_path,
             preventivo_id=preventivo_id,
+            compute_embeddings=compute_embeddings,
+            extract_properties=extract_properties,
         )
     except PreventivoSelectionError as exc:
         raise HTTPException(

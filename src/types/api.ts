@@ -147,6 +147,14 @@ export interface ApiSixPreventivoOption {
   internal_id: string;
   code?: string | null;
   description?: string | null;
+  author?: string | null;
+  version?: string | null;
+  date?: string | null;
+  price_list_id?: string | null;
+  price_list_label?: string | null;
+  rilevazioni?: number | null;
+  items?: number | null;
+  total_importo?: number | null;
 }
 
 export interface ApiSixPreventiviPreview {
@@ -309,6 +317,7 @@ export interface ApiConfrontoVoceOfferta {
   importo_totale?: number | null;
   note?: string | null;
   criticita?: string | null;
+  delta_quantita?: number | null;
 }
 
 export interface ApiConfrontoVoce {

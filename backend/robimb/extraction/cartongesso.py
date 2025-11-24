@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CATALOG_PATH = _PROJECT_ROOT / "resources" / "data" / "catalogs" / "cartongesso_contropareti.csv"
 
 _LAYER_KEYWORDS = {

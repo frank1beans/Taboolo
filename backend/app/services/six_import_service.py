@@ -125,6 +125,10 @@ class PreventivoOption:
     version: str | None = None
     date: str | None = None
     price_list_id: str | None = None
+    price_list_label: str | None = None
+    rilevazioni: int = 0
+    items: int = 0
+    total_importo: float | None = None
 
     @property
     def label(self) -> str | None:
@@ -151,6 +155,8 @@ class SixImportService:
         file_path: Path,
         *,
         preventivo_id: str | None = None,
+        compute_embeddings: bool = False,
+        extract_properties: bool = False,
     ) -> dict:
         commessa = session.get(Commessa, commessa_id)
         if not commessa:
@@ -183,6 +189,8 @@ class SixImportService:
                     price_list_labels=price_list_labels,
                     preferred_lists=preferred_lists,
                     preventivo_id=resolved_preventivo_id,
+                    compute_embeddings=compute_embeddings,
+                    extract_properties=extract_properties,
                 )
             report = self._build_report(session, commessa_id)
             report["importo_totale"] = parsed_computo.totale_importo or 0.0
@@ -203,6 +211,8 @@ class SixImportService:
                 price_catalog=price_catalog,
                 price_list_labels=price_list_labels,
                 preferred_lists=preferred_lists,
+                compute_embeddings=compute_embeddings,
+                extract_properties=extract_properties,
             )
 
         report = self._build_report(session, commessa_id)
@@ -240,6 +250,8 @@ class SixImportService:
         price_list_labels: dict[str, str],
         preferred_lists: Sequence[str],
         preventivo_id: str | None,
+        compute_embeddings: bool,
+        extract_properties: bool,
     ) -> None:
         self._purge_commessa_data(session, commessa.id)
         price_catalog_service.replace_catalog(
@@ -250,6 +262,8 @@ class SixImportService:
             preventivo_id=preventivo_id,
             price_list_labels=price_list_labels,
             preferred_lists=list(preferred_lists),
+            compute_embeddings=compute_embeddings,
+            extract_properties=extract_properties,
         )
 
         computo = Computo(
@@ -340,6 +354,8 @@ class SixImportService:
         price_catalog: Sequence[dict[str, Any]],
         price_list_labels: dict[str, str],
         preferred_lists: Sequence[str],
+        compute_embeddings: bool,
+        extract_properties: bool,
     ) -> None:
         """
         Importa solo l'elenco prezzi senza toccare WBS e computi.
@@ -354,6 +370,8 @@ class SixImportService:
             preventivo_id=None,
             price_list_labels=price_list_labels,
             preferred_lists=list(preferred_lists),
+            compute_embeddings=compute_embeddings,
+            extract_properties=extract_properties,
         )
 
     @staticmethod
@@ -518,6 +536,8 @@ class SixParser:
         preventivo_node = self._preventivo_nodes[target_id]
         option = self.preventivi[target_id]
         self.primary_title = option.description or option.code or option.internal_id
+        preventivo_price_list = self._map_price_list_id(option.price_list_id)
+        price_preference = self._build_price_preference(preventivo_price_list)
 
         aggregates: dict[
             tuple[str, tuple[tuple[int, str], ...], str | None, str | None],
@@ -571,7 +591,7 @@ class SixParser:
 
             has_lump_sum = any("a corpo" in text for text in lowered_comments)
 
-            prezzo = product.pick_price(lista_id, self.preferred_price_lists)
+            prezzo = product.pick_price(lista_id, price_preference)
             if prezzo is None:
                 logger.warning("Voce %s ignorata: prezzo non disponibile", product.code)
                 continue
@@ -639,15 +659,18 @@ class SixParser:
             importo = float(line_amount_decimal)
             total_amount_decimal += line_amount_decimal
 
-            if quantita <= 0 and entry.has_lump_sum:
-                quantita = 1.0
-            elif quantita > 0:
+            if quantita > 0:
                 quantita = self._ceil_quantity_value(quantita)
 
             code = entry.product.code
             if importo is None:
                 logger.warning("Voce %s ignorata: importo non valido", code)
                 continue
+
+            # Se quantita è zero, importa a zero (anche se a corpo)
+            if quantita <= 0:
+                quantita = 0.0
+                importo = 0.0
 
             note = self._build_note(sorted(entry.notes))
             meta_wbs_path = [
@@ -905,6 +928,55 @@ class SixParser:
                 return text.casefold()
         return None
 
+    @staticmethod
+    def _parse_numeric_value(raw: str | None) -> float | None:
+        """
+        Interpreta il contenuto testuale di una cella misura.
+        Supporta espressioni semplici (somma, sottrazione, moltiplicazione, divisione)
+        con separatore decimale sia punto che virgola e operatori moltiplicativi
+        scritti come "x", "·" o "×". Converte anche separatori di lista ";"/a capo
+        in somme.
+        """
+        if not raw:
+            return None
+        cleaned = raw.replace(",", ".")
+        cleaned = cleaned.replace("×", "*").replace("·", "*").replace("x", "*").replace("X", "*")
+        cleaned = re.sub(r"[;\r\n]+", "+", cleaned).strip()
+        if not cleaned:
+            return None
+
+        allowed_bin_ops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+        }
+        allowed_unary_ops = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+        def _eval(node: ast.AST) -> float:
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.BinOp) and type(node.op) in allowed_bin_ops:
+                left = _eval(node.left)
+                right = _eval(node.right)
+                return allowed_bin_ops[type(node.op)](left, right)
+            if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_unary_ops:
+                operand = _eval(node.operand)
+                return allowed_unary_ops[type(node.op)](operand)
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return float(node.value)
+            # Python <=3.7 compat
+            if hasattr(ast, "Num") and isinstance(node, ast.Num):  # type: ignore[attr-defined]
+                return float(node.n)  # type: ignore[attr-defined]
+            raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+        try:
+            expr = ast.parse(cleaned, mode="eval")
+            return float(_eval(expr))
+        except Exception:
+            # fallback: tenta un semplice float
+            return _to_float(cleaned)
+
     def _collect_comments(self, rilevazione: ET.Element) -> list[str]:
         comments: list[str] = []
         for commento in rilevazione.findall(f".//{self.ns}prvCommento"):
@@ -921,7 +993,7 @@ class SixParser:
         sign = -1 if operation == "-" else 1
         grouped: dict[int, float] = {}
         for cella in misura.findall(f"{self.ns}prvCella"):
-            value = _to_float(cella.attrib.get("testo"))
+            value = self._parse_numeric_value(cella.attrib.get("testo"))
             if value is None:
                 continue
             pos_label = cella.attrib.get("posizione") or "0"
@@ -932,9 +1004,15 @@ class SixParser:
             grouped[position] = grouped.get(position, 0.0) + value
         product = None
         if grouped:
-            product = 1.0
-            for value in grouped.values():
-                product *= value
+            # Regola: se tutte le celle valgono 0, la quantità è 0.
+            # Se almeno una cella è valorizzata, ignora gli zeri e moltiplica solo i valori non nulli.
+            non_zero = [v for v in grouped.values() if v not in (0, 0.0)]
+            if not non_zero:
+                product = 0.0
+            else:
+                product = 1.0
+                for value in non_zero:
+                    product *= value
         references: list[int] = []
         for commento in misura.findall(f"{self.ns}prvCommento"):
             text = commento.attrib.get("estesa") or commento.text
@@ -988,14 +1066,20 @@ class SixParser:
 
     def _compute_quantity(self, rilevazione: ET.Element) -> float | None:
         total = 0.0
+        current_sign = 1
         for misura in rilevazione.findall(f"{self.ns}prvMisura"):
             context = self._parse_misura_context(misura)
             if context.references:
                 continue
+            operation = (misura.attrib.get("operazione") or "").strip()
+            if operation == "-":
+                current_sign = -1
+            elif operation == "+":
+                current_sign = 1
             if context.product is None:
                 continue
-            total += context.sign * context.product
-        if total > 0:
+            total += current_sign * context.product
+        if total != 0:
             return round(total, 6)
         return None
 
@@ -1011,16 +1095,16 @@ class SixParser:
         decimal_price = Decimal(str(prezzo))
         if quantita > 0:
             rounded_quantity = Decimal(str(quantita)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
+                Decimal("0.000001"), rounding=ROUND_HALF_UP
             )
             line_amount = (rounded_quantity * decimal_price).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
             return float(rounded_quantity), line_amount
 
+        # Quantità nulla: non forzare a 1 per le lavorazioni a corpo, mantieni importo zero
         if has_lump_sum:
-            line_amount = decimal_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            return 0.0, line_amount
+            return 0.0, Decimal("0.00")
 
         return quantita, Decimal("0.00")
 
@@ -1177,6 +1261,19 @@ class SixParser:
         decimal_value = Decimal(str(value))
         return float(decimal_value.quantize(Decimal("0.01"), rounding=ROUND_UP))
 
+    def _build_price_preference(self, primary: str | None) -> list[str]:
+        """Ordina le liste prezzi da provare: prima quella del preventivo, poi le preferite globali."""
+        ordered: list[str] = []
+        seen: set[str] = set()
+        if primary:
+            ordered.append(primary)
+            seen.add(primary)
+        for item in self.preferred_price_lists:
+            if item and item not in seen:
+                ordered.append(item)
+                seen.add(item)
+        return ordered
+
     def _parse_units(self) -> None:
         for unit in self.root.findall(f".//{self.ns}unitaDiMisura"):
             unit_id = unit.attrib.get("unitaDiMisuraId")
@@ -1306,6 +1403,56 @@ class SixParser:
                 if dati_generali is not None:
                     date_str = dati_generali.attrib.get("data")
 
+            rilevazioni_nodes = preventivo.findall(f"{self.ns}prvRilevazione")
+            rilevazioni_count = len(rilevazioni_nodes)
+            items_count = 0
+            total_importo = 0.0
+            if rilevazioni_nodes:
+                product_ids = {
+                    node.attrib.get("prodottoId")
+                    for node in rilevazioni_nodes
+                    if node.attrib.get("prodottoId")
+                }
+                items_count = len(product_ids)
+                for rilevazione in rilevazioni_nodes:
+                    prodotto_id = rilevazione.attrib.get("prodottoId")
+                    if not prodotto_id:
+                        continue
+                    product = self.products.get(prodotto_id)
+                    if not product:
+                        continue
+                    lista_id = self._map_price_list_id(
+                        rilevazione.attrib.get("listaQuotazioneId")
+                    )
+                    prezzo = product.pick_price(
+                        lista_id,
+                        self._build_price_preference(self._map_price_list_id(price_list_id)),
+                    )
+                    if prezzo is None:
+                        continue
+                    progressivo = _to_int(rilevazione.attrib.get("progressivo"))
+                    quantita: float = 0.0
+                    if progressivo is not None:
+                        resolved = self._resolved_progressivo_quantities.get(progressivo)
+                        raw = self._raw_progressivo_quantities.get(progressivo)
+                        if resolved is not None:
+                            quantita = float(resolved)
+                        elif raw is not None:
+                            quantita = float(raw)
+                        else:
+                            quantita = float(self._compute_quantity(rilevazione) or 0.0)
+                    else:
+                        quantita = float(self._compute_quantity(rilevazione) or 0.0)
+                    try:
+                        total_importo += float(quantita) * float(prezzo)
+                    except Exception:  # noqa: BLE001
+                        continue
+
+            mapped_price_list = self._map_price_list_id(price_list_id)
+            price_list_label = None
+            if mapped_price_list:
+                price_list_label = self.price_lists.get(mapped_price_list, mapped_price_list)
+
             option = PreventivoOption(
                 internal_id=internal_id,
                 code=code,
@@ -1314,6 +1461,10 @@ class SixParser:
                 version=global_version,
                 date=date_str,
                 price_list_id=price_list_id,
+                price_list_label=price_list_label,
+                rilevazioni=rilevazioni_count,
+                items=items_count,
+                total_importo=round(total_importo, 2) if total_importo else None,
             )
             self.preventivi[internal_id] = option
             self._preventivo_nodes[internal_id] = preventivo
@@ -1379,12 +1530,9 @@ class SixParser:
         if cached is not None:
             return cached
         if progressivo in stack:
-            logger.warning(
-                "Riferimento circolare tra progressivi: %s -> %s",
-                progressivo,
-                sorted(stack),
-            )
-            return self._raw_progressivo_quantities.get(progressivo) or None
+            message = f"Riferimento circolare tra progressivi: {progressivo} -> {sorted(stack)}"
+            logger.error(message)
+            raise ValueError(message)
 
         stack.add(progressivo)
         base_value = self._raw_progressivo_quantities.get(progressivo) or 0.0
@@ -1396,7 +1544,7 @@ class SixParser:
             total += factor * ref_value
         stack.remove(progressivo)
 
-        resolved = round(total, 6) if total > 0 else None
+        resolved = round(total, 6) if total != 0 else None
         self._resolved_progressivo_quantities[progressivo] = resolved
         return resolved
 

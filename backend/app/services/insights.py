@@ -4,7 +4,7 @@ import unicodedata
 import re
 from collections import defaultdict
 from statistics import fmean, pstdev
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from types import SimpleNamespace
 
 from dataclasses import dataclass
@@ -57,6 +57,21 @@ class _InsightsCacheEntry:
 _INSIGHTS_CACHE: dict[int, _InsightsCacheEntry] = {}
 _INSIGHTS_CACHE_LOCK = RLock()
 _INSIGHTS_CACHE_TTL = timedelta(minutes=5)
+
+
+def _safe_float(value: Any) -> float | None:
+    """Converte numeri o stringhe numeriche (anche con virgola) in float, altrimenti None."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        text = str(value).strip().replace("\u00a0", "")
+        text = text.replace(",", ".")
+        text = "".join(ch for ch in text if ch not in (" ", "\t"))
+        return float(text)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class InsightsService:
@@ -606,7 +621,9 @@ class InsightsService:
         ) -> tuple[float | None, float | None, float | None]:
             if not offer:
                 return quantity, price, amount
-            resolved_quantity = quantity if quantity is not None else offer.quantita
+            resolved_quantity = _safe_float(quantity)
+            if resolved_quantity is None:
+                resolved_quantity = _safe_float(offer.quantita)
             resolved_price = offer.prezzo_unitario
             if resolved_quantity is not None:
                 resolved_amount = round(resolved_price * resolved_quantity, 2)
@@ -641,12 +658,14 @@ class InsightsService:
                     "voce_id": voce.id,
                     "computo_id": voce.computo_id,
                     "is_project": True,
+                    "source": "progetto",
                     "aggregation_key": InsightsService._aggregation_key(voce, code),
                     "codice": code,
                     "descrizione": descrizione or raw_descrizione,
                     "descrizione_originale": raw_descrizione,
                     "unita_misura": voce.unita_misura,
                     "quantita": quantita_val,
+                    "quantita_progetto": quantita_val,
                     "prezzo_unitario_progetto": prezzo_val,
                     "importo_totale_progetto": importo_val,
                     "offerte": {},
@@ -695,12 +714,14 @@ class InsightsService:
                         "voce_id": voce.id,
                         "computo_id": voce.computo_id,
                         "is_project": False,
+                        "source": "ritorno",
                         "aggregation_key": InsightsService._aggregation_key(voce, code),
                         "codice": code,
                         "descrizione": descrizione or raw_descrizione,
                         "descrizione_originale": raw_descrizione,
                         "unita_misura": voce.unita_misura,
                         "quantita": None,
+                        "quantita_progetto": None,
                         "prezzo_unitario_progetto": None,
                         "importo_totale_progetto": None,
                         "offerte": {},
@@ -723,12 +744,13 @@ class InsightsService:
                     if price_item_id is not None
                     else None
                 )
-                quantita_off, prezzo_off, importo_off = _apply_price_list_offer(
-                    offer,
-                    voce.quantita,
-                    voce.prezzo_unitario,
-                    voce.importo,
-                )
+                # Usa solo la quantita del ritorno (Excel impresa), senza fallback al progetto
+                quantita_off = _safe_float(voce.quantita) or 0.0
+                prezzo_off = offer.prezzo_unitario if offer else voce.prezzo_unitario
+                if prezzo_off is not None:
+                    importo_off = round(prezzo_off * quantita_off, 2)
+                else:
+                    importo_off = voce.importo
                 offerte[nome] = {
                     "quantita": quantita_off,
                     "prezzo_unitario": prezzo_off,
@@ -1314,16 +1336,16 @@ class InsightsService:
             if existing is None:
                 existing = {
                     **entry,
-                    "quantita": float(entry.get("quantita") or 0.0),
-                    "importo_totale_progetto": float(entry.get("importo_totale_progetto") or 0.0),
+                    "quantita": _safe_float(entry.get("quantita")) or 0.0,
+                    "importo_totale_progetto": _safe_float(entry.get("importo_totale_progetto")) or 0.0,
                     "offerte": {},
                 }
                 existing["prezzo_unitario_progetto"] = entry.get("prezzo_unitario_progetto")
                 existing["aggregation_key"] = key
                 bucket[key] = existing
             else:
-                existing["quantita"] += float(entry.get("quantita") or 0.0)
-                existing["importo_totale_progetto"] += float(entry.get("importo_totale_progetto") or 0.0)
+                existing["quantita"] += _safe_float(entry.get("quantita")) or 0.0
+                existing["importo_totale_progetto"] += _safe_float(entry.get("importo_totale_progetto")) or 0.0
                 if not existing.get("unita_misura") and entry.get("unita_misura"):
                     existing["unita_misura"] = entry.get("unita_misura")
                 for field in (
@@ -1351,26 +1373,28 @@ class InsightsService:
                         "criticita": offerta.get("criticita"),
                     },
                 )
-                target["quantita"] += float(offerta.get("quantita") or 0.0)
-                target["importo_totale"] += float(offerta.get("importo_totale") or 0.0)
+                target["quantita"] += _safe_float(offerta.get("quantita")) or 0.0
+                target["importo_totale"] += _safe_float(offerta.get("importo_totale")) or 0.0
                 if offerta.get("note"):
                     target["note"] = offerta.get("note")
                 if offerta.get("criticita"):
                     target["criticita"] = offerta.get("criticita")
 
         for entry in bucket.values():
-            qty = entry["quantita"]
+            qty = _safe_float(entry.get("quantita")) or 0.0
             if qty and abs(qty) > 1e-9:
                 entry["prezzo_unitario_progetto"] = round(entry["importo_totale_progetto"] / qty, 4)
             else:
                 entry["prezzo_unitario_progetto"] = entry.get("prezzo_unitario_progetto")
 
+            project_qty_rounded = round(qty, 2)
             for offerta in entry["offerte"].values():
-                qty_off = offerta["quantita"]
+                qty_off = _safe_float(offerta.get("quantita")) or 0.0
                 if qty_off and abs(qty_off) > 1e-9:
                     offerta["prezzo_unitario"] = round(offerta["importo_totale"] / qty_off, 4)
                 else:
                     offerta["prezzo_unitario"] = offerta.get("prezzo_unitario") or 0.0
+                offerta["delta_quantita"] = round(qty_off - project_qty_rounded, 2)
 
         merged = list(bucket.values())
         merged.sort(key=lambda item: (item.get("descrizione") or "", item.get("codice") or ""))

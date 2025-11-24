@@ -15,7 +15,8 @@ engine_kwargs = {
 }
 
 if _url.get_backend_name().startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+    # Aumenta il timeout per ridurre i lock "database is locked" durante batch pesanti
+    connect_args = {"check_same_thread": False, "timeout": 30}
 else:
     engine_kwargs.update(
         {

@@ -29,6 +29,7 @@ import { UploadArea } from "@/components/UploadArea";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api-client";
+import { formatCurrency } from "@/lib/formatters";
 
 type ImportMode = "project" | "return";
 type ReturnFormat = "lc" | "mc";
@@ -73,6 +74,8 @@ interface RoundUploadDialogProps {
     file: File;
     tipo: "excel" | "six";
     preventivoId?: string;
+    enableEmbeddings?: boolean;
+    enablePropertyExtraction?: boolean;
   }) => Promise<void>;
   onPreviewPreventivi: (file: File) => Promise<ApiSixPreventivoOption[]>;
   onUploadRitorno: (params: {
@@ -246,6 +249,8 @@ export function RoundUploadDialog({
   const [progressiveColumnKey, setProgressiveColumnKey] = useState("");
   const [selectedConfigId, setSelectedConfigId] = useState<string>(CONFIG_MANUAL_VALUE);
   const [pendingSheetName, setPendingSheetName] = useState<string | null>(null);
+  const [enableEmbeddings, setEnableEmbeddings] = useState(false);
+  const [enablePropertyExtraction, setEnablePropertyExtraction] = useState(false);
   const [configSaveName, setConfigSaveName] = useState("");
   const [configSaveImpresa, setConfigSaveImpresa] = useState("");
   const [configSaveNote, setConfigSaveNote] = useState("");
@@ -686,6 +691,8 @@ export function RoundUploadDialog({
           file: projectFile,
           tipo: projectFileKind === "six" ? "six" : "excel",
           preventivoId: selectedPreventivoId || undefined,
+          enableEmbeddings,
+          enablePropertyExtraction,
         });
       } else if (importMode === "return" && returnFile) {
         const roundNumber =
@@ -845,12 +852,61 @@ export function RoundUploadDialog({
                   <SelectContent>
                     {preventivoOptions.map((option) => (
                       <SelectItem key={option.internal_id} value={option.internal_id}>
-                        {option.code ? `${option.code} – ` : ""}
-                        {option.description ?? option.internal_id}
+                        <div className="flex flex-col gap-[2px]">
+                          <span className="text-sm font-medium">
+                            {option.code ? `${option.code} — ` : ""}
+                            {option.description ?? option.internal_id}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {option.date ? `Data: ${option.date}` : "Data: n/d"}
+                            {option.price_list_label ? ` · Listino: ${option.price_list_label}` : ""}
+                            {option.rilevazioni != null ? ` · Rilevazioni: ${option.rilevazioni}` : ""}
+                            {option.items != null ? ` · Prodotti: ${option.items}` : ""}
+                          </span>
+                          {option.total_importo != null && (
+                            <span className="text-xs text-muted-foreground">
+                              Importo stimato: {formatCurrency(option.total_importo)}
+                            </span>
+                          )}
+                        </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <div className="grid gap-3 rounded-md border border-border/60 bg-background/40 p-3 text-sm text-foreground">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="font-semibold">Opzioni di elaborazione</p>
+                      <p className="text-xs text-muted-foreground">Disabilitate di default per performance.</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <label className="flex items-center gap-2">
+                      <Switch
+                        checked={enableEmbeddings}
+                        onCheckedChange={setEnableEmbeddings}
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Calcola embedding prezzi</p>
+                        <p className="text-xs text-muted-foreground">
+                          Genera embedding semantici del listino (CPU/GPU intensivo).
+                        </p>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <Switch
+                        checked={enablePropertyExtraction}
+                        onCheckedChange={setEnablePropertyExtraction}
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Estrai proprietà da descrizione</p>
+                        <p className="text-xs text-muted-foreground">
+                          Rallenta l'import: usa solo se ti servono subito gli attributi.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
               </>
             )
           ) : (

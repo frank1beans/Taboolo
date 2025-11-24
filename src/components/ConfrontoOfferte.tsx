@@ -39,6 +39,7 @@ interface ConfrontoRow {
   quantita: number;
   prezzoUnitarioProgetto: number;
   importoTotaleProgetto: number;
+  hasQuantityMismatch?: boolean;
   wbs6Code?: string | null;
   wbs6Description?: string | null;
   wbs7Code?: string | null;
@@ -58,6 +59,7 @@ type OffertaRecord = {
   quantita?: number;
   prezzoUnitario?: number;
   importoTotale?: number;
+  deltaQuantita?: number | null;
   criticita?: string;
   note?: string;
 };
@@ -98,6 +100,7 @@ export function ConfrontoOfferte({
   const isDarkMode = theme === "dark";
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [showOnlyQuantityMismatch, setShowOnlyQuantityMismatch] = useState(false);
   const isRoundControlled = selectedRound !== undefined;
   const [internalRound, setInternalRound] = useState<"all" | number>("all");
   const effectiveRound = isRoundControlled ? (selectedRound as "all" | number) : internalRound;
@@ -223,6 +226,7 @@ export function ConfrontoOfferte({
 
       const prezziVisibili: number[] = [];
       const offerCache = new Map<string, OffertaRecord | null>();
+      let hasQuantityMismatch = false;
 
       filteredImprese.forEach((impresa) => {
         const fieldPrefix = getImpresaFieldPrefix(impresa);
@@ -238,6 +242,10 @@ export function ConfrontoOfferte({
 
         row[`${fieldPrefix}_importoTotale`] =
           offerta && typeof offerta.importoTotale === "number" ? offerta.importoTotale : null;
+        row[`${fieldPrefix}_quantita`] =
+          offerta && typeof offerta.quantita === "number" ? offerta.quantita : null;
+        row[`${fieldPrefix}_deltaQuantita`] =
+          offerta && typeof offerta.deltaQuantita === "number" ? offerta.deltaQuantita : null;
 
         if (offerta && offerta.prezzoUnitario != null && voce.prezzoUnitarioProgetto) {
           row[`${fieldPrefix}_deltaPerc`] =
@@ -246,6 +254,14 @@ export function ConfrontoOfferte({
             100;
         } else {
           row[`${fieldPrefix}_deltaPerc`] = null;
+        }
+
+        if (
+          offerta &&
+          typeof offerta.deltaQuantita === "number" &&
+          Math.abs(offerta.deltaQuantita) > 1e-6
+        ) {
+          hasQuantityMismatch = true;
         }
       });
 
@@ -286,19 +302,24 @@ export function ConfrontoOfferte({
         });
       }
 
+      row.hasQuantityMismatch = hasQuantityMismatch;
       return row;
     });
   }, [confrontoData?.voci, filteredImprese]);
 
   const filteredRowData = useMemo(() => {
-    if (!selectedWbsNodeId) return rowData;
+    let rows = rowData;
+    if (showOnlyQuantityMismatch) {
+      rows = rows.filter((row) => row.hasQuantityMismatch);
+    }
+    if (!selectedWbsNodeId) return rows;
 
-    return rowData.filter((row) => {
+    return rows.filter((row) => {
       const wbs6Match = row.wbs6Code === selectedWbsNodeId;
       const wbs7Match = row.wbs7Code === selectedWbsNodeId;
       return wbs6Match || wbs7Match;
     });
-  }, [rowData, selectedWbsNodeId]);
+  }, [rowData, selectedWbsNodeId, showOnlyQuantityMismatch]);
 
   const exportColumns = useMemo(() => {
     const baseExportCols = [
@@ -335,7 +356,24 @@ export function ConfrontoOfferte({
           },
         },
         {
-          header: `${headerLabel} - Î” progetto`,
+          header: `${headerLabel} - Q.tà`,
+          field: `${fieldPrefix}_quantita`,
+          valueFormatter: (row: ConfrontoRow) => {
+            const val = row[`${fieldPrefix}_quantita`];
+            return val != null ? Number(val).toFixed(2) : "-";
+          },
+        },
+        {
+          header: `${headerLabel} - Δ Q.tà`,
+          field: `${fieldPrefix}_deltaQuantita`,
+          valueFormatter: (row: ConfrontoRow) => {
+            const val = row[`${fieldPrefix}_deltaQuantita`];
+            if (val == null) return "-";
+            return val >= 0 ? `+${val.toFixed(2)}` : val.toFixed(2);
+          },
+        },
+        {
+          header: `${headerLabel} - Δ progetto`,
           field: `${fieldPrefix}_deltaPerc`,
           valueFormatter: (row: ConfrontoRow) => {
             const val = row[`${fieldPrefix}_deltaPerc`];
@@ -343,7 +381,7 @@ export function ConfrontoOfferte({
           },
         },
         {
-          header: `${headerLabel} - Î” media`,
+          header: `${headerLabel} - Δ media`,
           field: `${fieldPrefix}_deltaMedia`,
           valueFormatter: (row: ConfrontoRow) => {
             const val = row[`${fieldPrefix}_deltaMedia`];
@@ -388,6 +426,18 @@ export function ConfrontoOfferte({
         width: 110,
         type: "numericColumn",
         valueFormatter: (params) => (params.value != null ? params.value.toFixed(2) : "-"),
+      },
+      {
+        field: "quantity_alert",
+        headerName: "Δ Quantità",
+        width: 120,
+        valueGetter: (params) => (params.data?.hasQuantityMismatch ? "Diff." : ""),
+        cellClass: (params) =>
+          params.data?.hasQuantityMismatch ? "text-red-600 font-semibold" : "text-muted-foreground",
+        tooltipValueGetter: (params) =>
+          params.data?.hasQuantityMismatch
+            ? "Quantità ritorno diversa dal progetto per almeno un'impresa"
+            : "Quantità allineata",
       },
       {
         field: "prezzoUnitarioProgetto",
@@ -475,6 +525,30 @@ export function ConfrontoOfferte({
         headerClass: "text-[11px] uppercase tracking-wide text-muted-foreground",
         children: [
           {
+            headerName: "Q.tà",
+            field: `${fieldPrefix}_quantita`,
+            width: 120,
+            type: "numericColumn",
+            valueFormatter: (params) =>
+              params.value != null ? Number(params.value).toFixed(2) : "-",
+            cellStyle: {
+              backgroundColor: color.bg,
+              borderLeft: `1px solid ${color.border}`,
+            },
+          },
+          {
+            headerName: "Δ Q.tà",
+            field: `${fieldPrefix}_deltaQuantita`,
+            width: 120,
+            type: "numericColumn",
+            valueFormatter: (params) => {
+              if (params.value == null) return "-";
+              const val = params.value as number;
+              return val >= 0 ? `+${val.toFixed(2)}` : val.toFixed(2);
+            },
+            cellStyle: deltaCellStyle,
+          },
+          {
             headerName: "P.U.",
             field: `${fieldPrefix}_prezzoUnitario`,
             width: 120,
@@ -482,7 +556,6 @@ export function ConfrontoOfferte({
             valueFormatter: (params) => (params.value != null ? formatCurrency(params.value) : "-"),
             cellStyle: {
               backgroundColor: color.bg,
-              borderLeft: `1px solid ${color.border}`,
             },
           },
           {
@@ -571,6 +644,14 @@ export function ConfrontoOfferte({
           onRemove: () => handleRoundSelect("all"),
         }]
       : []),
+    ...(showOnlyQuantityMismatch
+      ? [{
+          id: "quantityMismatch",
+          label: "Δ Quantità",
+          value: "Solo differenze",
+          onRemove: () => setShowOnlyQuantityMismatch(false),
+        }]
+      : []),
   ];
 
   // Build round filters
@@ -611,6 +692,14 @@ export function ConfrontoOfferte({
       }
       actions={
         <div className="flex items-center gap-2">
+          <Button
+            variant={showOnlyQuantityMismatch ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setShowOnlyQuantityMismatch((prev) => !prev)}
+            className="h-8 gap-1.5"
+          >
+            Δ Quantità
+          </Button>
           {wbsData.length > 0 && (
             <Button
               variant={isSidebarOpen ? "secondary" : "outline"}

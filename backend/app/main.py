@@ -36,28 +36,6 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.debug else None,
     )
 
-    # SECURITY: CORS rigoroso - mai accettare "*"
-    allowed_origins = settings.cors_origins or []
-    if isinstance(allowed_origins, str):
-        allowed_origins = [allowed_origins]
-
-    # SECURITY: Rimuovi qualsiasi "*" dalla lista
-    allowed_origins = [origin for origin in allowed_origins if origin != "*"]
-
-    if not allowed_origins:
-        # SECURITY: Se non configurato, usa solo localhost
-        allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
-
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins,
-        allow_credentials=settings.cors_allow_credentials,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # SECURITY: Metodi espliciti, no "*"
-        allow_headers=["Content-Type", "Authorization"],  # SECURITY: Headers espliciti
-        expose_headers=["*"],  # Esponi tutti gli headers nelle risposte
-        max_age=3600,  # Cache preflight per 1 ora
-    )
-
     @application.on_event("startup")
     def _startup() -> None:
         init_db()
@@ -79,7 +57,31 @@ def create_app() -> FastAPI:
             logger.warning("Impossibile inizializzare il resolver proprietà: %s", exc)
 
     application.include_router(api_router)
+
+    # Audit e sicurezza: eseguito prima delle route, ma dopo il CORS (CORS deve restituire headers anche sugli errori)
     application.middleware("http")(audit_and_security_middleware)
+
+    # SECURITY: CORS rigoroso - mai accettare "*"
+    allowed_origins = settings.cors_origins or []
+    if isinstance(allowed_origins, str):
+        allowed_origins = [allowed_origins]
+
+    # SECURITY: Rimuovi qualsiasi "*" dalla lista
+    allowed_origins = [origin for origin in allowed_origins if origin != "*"]
+
+    if not allowed_origins:
+        # SECURITY: Se non configurato, usa solo localhost
+        allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=settings.cors_allow_credentials,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # SECURITY: Metodi espliciti, no "*"
+        allow_headers=["Content-Type", "Authorization"],  # SECURITY: Headers espliciti
+        expose_headers=["*"],  # Esponi tutti gli headers nelle risposte
+        max_age=3600,  # Cache preflight per 1 ora
+    )
     return application
 
 

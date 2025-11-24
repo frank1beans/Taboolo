@@ -1,23 +1,44 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Clock3, Euro, Layers3 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { BarChart3, Clock3, Euro, Layers3, Pencil, Settings2, Trash2 } from "lucide-react";
 import { ModificaCommessaDialog } from "@/components/ModificaCommessaDialog";
-import { ComputoTreeItem } from "@/components/ComputoTreeView";
 import { RoundUploadDialog } from "@/components/RoundUploadDialog";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api-client";
 import { formatCurrency, formatShortDate, formatDateTime, groupComputi } from "@/lib/formatters";
-import { ApiSixImportReport } from "@/types/api";
+import { ApiImportConfig, ApiSixImportReport } from "@/types/api";
 import { CommessaPageHeader } from "@/components/CommessaPageHeader";
-import {
-  CommessaSummaryStrip,
-  QuickActionsCard,
-  RecentActivityCard,
-  ComputoListCard,
-  type ActivityItem,
-} from "@/components/commessa";
+import { CommessaSummaryStrip } from "@/components/commessa";
 import { useCommessaContext } from "@/hooks/useCommessaContext";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 
 type RoundDetail = {
   round: number;
@@ -28,7 +49,21 @@ type ProgettoUploadPayload = {
   file: File;
   tipo: "excel" | "six";
   preventivoId?: string;
+  enableEmbeddings?: boolean;
+  enablePropertyExtraction?: boolean;
 };
+
+type DocumentDraft = {
+  tipo: "progetto" | "ritorno" | "listino";
+  impresa: string;
+  round: string;
+  preventivoId: string;
+  sheetName: string;
+  configId: string;
+  mode: "lc" | "mc";
+};
+
+const NONE_CONFIG_VALUE = "__none__";
 
 const CommessaDetail = () => {
   const { id } = useParams();
@@ -38,8 +73,17 @@ const CommessaDetail = () => {
   const { toast } = useToast();
 
   const [impresaName, setImpresaName] = useState("");
+  const [drafts, setDrafts] = useState<Record<number, DocumentDraft>>({});
+  const [editingDocId, setEditingDocId] = useState<number | null>(null);
 
   const { commessa, refetchCommessa } = useCommessaContext();
+
+  const { data: importConfigs = [] } = useQuery<ApiImportConfig[]>({
+    queryKey: ["import-configs", commessaIdKey],
+    queryFn: () => api.listImportConfigs({ commessaId }),
+    enabled: Number.isFinite(commessaId),
+    staleTime: 60_000,
+  });
 
   const invalidateCommessaData = useCallback(async () => {
     if (!Number.isFinite(commessaId)) return;
@@ -131,8 +175,9 @@ const CommessaDetail = () => {
       });
     },
   });
-  const sixImportMutation = useMutation<ApiSixImportReport, unknown, { file: File; preventivoId?: string }>({
-    mutationFn: ({ file, preventivoId }) => api.importSixFile(commessaId, file, preventivoId),
+  const sixImportMutation = useMutation<ApiSixImportReport, unknown, { file: File; preventivoId?: string; enableEmbeddings?: boolean; enablePropertyExtraction?: boolean }>({
+    mutationFn: ({ file, preventivoId, enableEmbeddings, enablePropertyExtraction }) =>
+      api.importSixFile(commessaId, file, preventivoId, { enableEmbeddings, enablePropertyExtraction }),
     onSuccess: async (result) => {
       await invalidateCommessaData();
       const listinoOnly = result?.listino_only;
@@ -194,6 +239,72 @@ const CommessaDetail = () => {
     },
   });
 
+  const documents = useMemo(() => {
+    return (commessa?.computi ?? []).map((c) => {
+      const lowerName = (c.file_nome ?? "").toLowerCase();
+      const format = lowerName.endsWith(".six") || lowerName.endsWith(".xml")
+        ? "STR Vision"
+        : lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")
+          ? "Excel"
+          : "Non specificato";
+      const mode: "lc" | "mc" = c.tipo === "progetto" ? "mc" : "lc";
+      return {
+        id: c.id,
+        nome: c.nome,
+        tipo: c.tipo,
+        impresa: c.impresa ?? "",
+        round: c.round_number ? String(c.round_number) : "",
+        source: c.file_nome ?? "—",
+        format,
+        mode,
+      };
+    });
+  }, [commessa?.computi]);
+
+  useEffect(() => {
+    if (!documents.length) {
+      setDrafts({});
+      return;
+    }
+    setDrafts((prev) => {
+      const next: Record<number, DocumentDraft> = { ...prev };
+      documents.forEach((doc) => {
+        if (!next[doc.id]) {
+          next[doc.id] = {
+            tipo: doc.tipo,
+            impresa: doc.impresa,
+            round: doc.round,
+            preventivoId: "",
+            sheetName: "",
+            configId: "",
+            mode: doc.mode,
+          };
+        }
+      });
+      return next;
+    });
+  }, [documents]);
+
+  const updateDraft = useCallback((id: number, patch: Partial<DocumentDraft>) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], ...patch },
+    }));
+  }, []);
+
+  const handleApplyDraft = useCallback(
+    (id: number) => {
+      const draft = drafts[id];
+      if (!draft) return;
+      toast({
+        title: "Metadati aggiornati",
+        description:
+          "Le modifiche ai metadati sono applicate localmente. Collega qui l'endpoint backend quando sarà disponibile.",
+      });
+    },
+    [drafts, toast],
+  );
+
   const { progetto, ritorni } = useMemo(
     () => groupComputi(commessa?.computi ?? []),
     [commessa?.computi],
@@ -208,12 +319,19 @@ const CommessaDetail = () => {
     file,
     tipo,
     preventivoId,
+    enableEmbeddings,
+    enablePropertyExtraction,
   }: ProgettoUploadPayload) => {
     if (tipo === "excel") {
       await uploadMutation.mutateAsync(file);
       return;
     }
-    await sixImportMutation.mutateAsync({ file, preventivoId });
+    await sixImportMutation.mutateAsync({
+      file,
+      preventivoId,
+      enableEmbeddings,
+      enablePropertyExtraction,
+    });
   };
 
   const handleUploadRitorno = async (params: {
@@ -261,18 +379,6 @@ const CommessaDetail = () => {
     () => roundDetails.map((detail) => detail.round),
     [roundDetails],
   );
-
-  const computoTreeItems: ComputoTreeItem[] = useMemo(() => {
-    return (commessa?.computi ?? []).map((c) => ({
-      id: c.id,
-      nome: c.nome,
-      tipo: c.tipo,
-      impresa: c.impresa,
-      round_number: c.round_number,
-      importo_totale: c.importo_totale,
-      created_at: c.created_at,
-    }));
-  }, [commessa?.computi]);
 
   const handleDeleteComputo = async (computoId: number, computoName: string) => {
     if (!confirm(`Sei sicuro di voler eliminare il computo "${computoName}"?`)) {
@@ -325,74 +431,244 @@ const CommessaDetail = () => {
     ];
   }, [commessa?.computi?.length, progetto, ritorni, roundDetails, updatedAt]);
 
-  const recentActivity: ActivityItem[] = useMemo(() => {
-    return [...(commessa?.computi ?? [])]
-      .sort(
-        (a, b) =>
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-      )
-      .slice(0, 5)
-      .map((computo) => ({
-        id: computo.id,
-        title: computo.nome,
-        meta:
-          computo.tipo === "progetto"
-            ? "Computo di progetto"
-            : `Ritorno round ${computo.round_number ?? "-"}`,
-        timestamp: formatDateTime(computo.updated_at),
-      }));
-  }, [commessa?.computi]);
+  const editingDoc = editingDocId ? documents.find((d) => d.id === editingDocId) : null;
 
   return (
     <div className="flex flex-col gap-5">
       <CommessaPageHeader
         commessa={commessa}
-        title="Computo e riepilogo"
-        description="Gestisci il computo di progetto e i ritorni di gara collegati."
+        title="Computo & riepilogo"
+        description="Gestisci i documenti di progetto e i ritorni di gara."
       >
         <CommessaSummaryStrip metrics={summaryMetrics} />
       </CommessaPageHeader>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
-        <div className="space-y-4">
-          <ComputoListCard
-            computi={computoTreeItems}
-            onDeleteComputo={handleDeleteComputo}
-            isDeleting={deleteMutation.isPending}
-          />
+      {/* Card documenti unificata */}
+      <div className="rounded-2xl border border-border/60 bg-card/80 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
+          <div className="space-y-0.5">
+            <h3 className="text-base font-semibold text-foreground">Documenti</h3>
+            <p className="text-sm text-muted-foreground">
+              {documents.length} documento/i caricato/i
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <RoundUploadDialog
+              commessaId={commessa?.id ?? commessaId}
+              onUploadProgetto={handleUploadProgetto}
+              onPreviewPreventivi={handlePreviewPreventivi}
+              onUploadRitorno={handleUploadRitorno}
+              existingRounds={existingRounds}
+              roundDetails={roundDetails}
+              disabled={
+                uploadMutation.isPending ||
+                ritornoUploadMutation.isPending ||
+                sixImportMutation.isPending
+              }
+              triggerProps={{
+                className: "gap-2",
+                variant: "default",
+              }}
+            />
+            {commessa && (
+              <ModificaCommessaDialog commessa={commessa} onUpdate={handleUpdateCommessa} />
+            )}
+          </div>
         </div>
 
-        <div className="space-y-4">
-          <QuickActionsCard
-            headerAction={
-              commessa && (
-                <ModificaCommessaDialog commessa={commessa} onUpdate={handleUpdateCommessa} />
-              )
-            }
-            uploadAction={
-              <RoundUploadDialog
-                commessaId={commessa?.id ?? commessaId}
-                onUploadProgetto={handleUploadProgetto}
-                onPreviewPreventivi={handlePreviewPreventivi}
-                onUploadRitorno={handleUploadRitorno}
-                existingRounds={existingRounds}
-                roundDetails={roundDetails}
-                disabled={
-                  uploadMutation.isPending ||
-                  ritornoUploadMutation.isPending ||
-                  sixImportMutation.isPending
-                }
-                triggerProps={{
-                  className: "w-full justify-center gap-2",
-                  size: "default",
-                }}
-              />
-            }
-          />
-
-          <RecentActivityCard activities={recentActivity} />
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[100px]">Tipo</TableHead>
+                <TableHead>Documento</TableHead>
+                <TableHead>Impresa</TableHead>
+                <TableHead className="w-[80px]">Round</TableHead>
+                <TableHead className="text-right">Importo</TableHead>
+                <TableHead className="w-[120px] text-right">Azioni</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {documents.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    Nessun documento caricato. Usa il pulsante "Carica" per importare un computo.
+                  </TableCell>
+                </TableRow>
+              )}
+              {documents.map((doc) => {
+                const computo = commessa?.computi?.find((c) => c.id === doc.id);
+                return (
+                  <TableRow key={doc.id}>
+                    <TableCell>
+                      <Badge
+                        variant={doc.tipo === "progetto" ? "default" : "secondary"}
+                        className={doc.tipo === "progetto" ? "bg-primary/90" : ""}
+                      >
+                        {doc.tipo === "progetto" ? "Progetto" : "Ritorno"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-0.5">
+                        <div className="font-medium text-foreground">{doc.nome}</div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span>{doc.format}</span>
+                          <span>•</span>
+                          <span className="truncate max-w-[200px]">{doc.source}</span>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {doc.impresa || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {doc.round || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-sm">
+                      {computo?.importo_totale ? formatCurrency(computo.importo_totale) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => setEditingDocId(doc.id)}
+                          title="Modifica metadati"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => handleDeleteComputo(doc.id, doc.nome)}
+                          disabled={deleteMutation.isPending}
+                          title="Elimina"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         </div>
       </div>
+
+      {/* Dialog per modifica metadati */}
+      <Dialog open={!!editingDocId} onOpenChange={(open) => !open && setEditingDocId(null)}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings2 className="h-5 w-5" />
+              Modifica metadati
+            </DialogTitle>
+            <DialogDescription>
+              {editingDoc?.nome ?? "Documento"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {editingDoc && drafts[editingDoc.id] && (
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="tipo">Tipo documento</Label>
+                <Select
+                  value={drafts[editingDoc.id]?.tipo ?? editingDoc.tipo}
+                  onValueChange={(value) =>
+                    updateDraft(editingDoc.id, { tipo: value as DocumentDraft["tipo"] })
+                  }
+                >
+                  <SelectTrigger id="tipo">
+                    <SelectValue placeholder="Tipo documento" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="progetto">Progetto</SelectItem>
+                    <SelectItem value="ritorno">Ritorno di gara</SelectItem>
+                    <SelectItem value="listino">Listino</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="impresa">Impresa</Label>
+                <Input
+                  id="impresa"
+                  placeholder="Nome impresa"
+                  value={drafts[editingDoc.id]?.impresa ?? editingDoc.impresa}
+                  onChange={(e) => updateDraft(editingDoc.id, { impresa: e.target.value })}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="round">Round</Label>
+                <Input
+                  id="round"
+                  placeholder="Numero round"
+                  value={drafts[editingDoc.id]?.round ?? editingDoc.round}
+                  onChange={(e) => updateDraft(editingDoc.id, { round: e.target.value })}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="config">Configurazione import</Label>
+                <Select
+                  value={drafts[editingDoc.id]?.configId || NONE_CONFIG_VALUE}
+                  onValueChange={(value) =>
+                    updateDraft(editingDoc.id, { configId: value === NONE_CONFIG_VALUE ? "" : value })
+                  }
+                >
+                  <SelectTrigger id="config">
+                    <SelectValue placeholder="Configurazione" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_CONFIG_VALUE}>Nessuna configurazione</SelectItem>
+                    {importConfigs.map((config) => (
+                      <SelectItem key={config.id} value={String(config.id)}>
+                        {config.nome || `Config ${config.id}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Modalità</Label>
+                <ToggleGroup
+                  type="single"
+                  value={drafts[editingDoc.id]?.mode ?? editingDoc.mode}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    updateDraft(editingDoc.id, { mode: value as "lc" | "mc" });
+                  }}
+                  className="justify-start"
+                >
+                  <ToggleGroupItem value="lc">LC</ToggleGroupItem>
+                  <ToggleGroupItem value="mc">MC</ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingDocId(null)}>
+              Annulla
+            </Button>
+            <Button
+              onClick={() => {
+                if (editingDocId) {
+                  handleApplyDraft(editingDocId);
+                  setEditingDocId(null);
+                }
+              }}
+            >
+              Salva modifiche
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

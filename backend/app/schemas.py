@@ -313,6 +313,14 @@ class SixPreventivoOptionSchema(BaseModel):
     internal_id: str
     code: Optional[str] = None
     description: Optional[str] = None
+    author: Optional[str] = None
+    version: Optional[str] = None
+    date: Optional[str] = None
+    price_list_id: Optional[str] = None
+    price_list_label: Optional[str] = None
+    rilevazioni: Optional[int] = None
+    items: Optional[int] = None
+    total_importo: Optional[float] = None
 
 
 class SixPreventiviPreviewSchema(BaseModel):

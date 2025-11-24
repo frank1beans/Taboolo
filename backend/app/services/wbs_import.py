@@ -15,6 +15,7 @@ La gerarchia si divide in:
 from dataclasses import dataclass
 from io import BytesIO
 from datetime import datetime
+from difflib import SequenceMatcher
 import re
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -74,6 +75,34 @@ class WbsImportStats:
     wbs7_updated: int = 0
 
 
+@dataclass
+class Wbs6NormalizationMatch:
+    current_code: str
+    current_description: Optional[str]
+    suggested_code: Optional[str]
+    suggested_description: Optional[str]
+    score: float
+    reason: str
+
+
+@dataclass
+class Wbs7NormalizationMatch:
+    current_code: Optional[str]
+    current_description: Optional[str]
+    wbs6_code: Optional[str]
+    suggested_code: Optional[str]
+    suggested_description: Optional[str]
+    suggested_wbs6_code: Optional[str]
+    score: float
+    reason: str
+
+
+@dataclass
+class WbsNormalizationResult:
+    wbs6: list[Wbs6NormalizationMatch]
+    wbs7: list[Wbs7NormalizationMatch]
+
+
 class WbsImportService:
     """Parser e persistenza per file Excel WBS."""
 
@@ -123,6 +152,167 @@ class WbsImportService:
             select(Wbs7).where(Wbs7.commessa_id == commessa_id)
         ).all()
         return list(spaziali), list(wbs6_nodes), list(wbs7_nodes)
+
+    @classmethod
+    def build_normalization_plan_from_excel(
+        cls,
+        session: Session,
+        commessa: Commessa,
+        *,
+        file_bytes: bytes,
+        min_score_wbs6: float = 0.72,
+        min_score_wbs7: float = 0.68,
+    ) -> WbsNormalizationResult:
+        """
+        Genera un piano di normalizzazione WBS a partire da un Excel di riferimento.
+
+        Per ogni WBS6/WBS7 già presente in commessa propone un codice target basato
+        su una corrispondenza per descrizione con i nodi definiti nel file fornito.
+        Non esegue modifiche a DB: restituisce solo i suggerimenti.
+        """
+        rows = cls._parse_excel(BytesIO(file_bytes))
+        if not rows:
+            raise ValueError("Il file non contiene righe WBS valide")
+
+        reference_wbs6: Dict[str, dict] = {}
+        reference_wbs6_index: list[dict] = []
+        reference_wbs7: Dict[str, list[dict]] = {}
+
+        for row in rows:
+            norm_desc = cls._normalize_match_text(row.wbs6_description)
+            reference_wbs6[row.wbs6_code] = {
+                "code": row.wbs6_code,
+                "description": row.wbs6_description,
+                "norm_desc": norm_desc,
+            }
+            reference_wbs6_index.append(reference_wbs6[row.wbs6_code])
+            if row.wbs7_code:
+                bucket = reference_wbs7.setdefault(row.wbs6_code, [])
+                bucket.append(
+                    {
+                        "code": row.wbs7_code,
+                        "description": row.wbs7_description,
+                        "norm_desc": cls._normalize_match_text(row.wbs7_description),
+                    }
+                )
+
+        existing_wbs6 = session.exec(
+            select(Wbs6).where(Wbs6.commessa_id == commessa.id)
+        ).all()
+        wbs6_matches: list[Wbs6NormalizationMatch] = []
+        wbs6_target_by_id: Dict[int, str] = {}
+
+        for node in existing_wbs6:
+            direct_match = reference_wbs6.get(node.code)
+            if direct_match:
+                wbs6_target_by_id[node.id] = node.code
+                wbs6_matches.append(
+                    Wbs6NormalizationMatch(
+                        current_code=node.code,
+                        current_description=node.description,
+                        suggested_code=node.code,
+                        suggested_description=direct_match["description"],
+                        score=1.0,
+                        reason="code_match",
+                    )
+                )
+                continue
+
+            best = cls._pick_best_by_description(
+                node.description or node.label,
+                reference_wbs6_index,
+            )
+            if best and best[1] >= min_score_wbs6:
+                target = best[0]
+                wbs6_target_by_id[node.id] = target["code"]
+                wbs6_matches.append(
+                    Wbs6NormalizationMatch(
+                        current_code=node.code,
+                        current_description=node.description,
+                        suggested_code=target["code"],
+                        suggested_description=target["description"],
+                        score=best[1],
+                        reason="description_match",
+                    )
+                )
+            else:
+                wbs6_target_by_id[node.id] = node.code
+                wbs6_matches.append(
+                    Wbs6NormalizationMatch(
+                        current_code=node.code,
+                        current_description=node.description,
+                        suggested_code=None,
+                        suggested_description=None,
+                        score=0.0,
+                        reason="unmatched",
+                    )
+                )
+
+        existing_wbs6_map: Dict[int, Wbs6] = {node.id: node for node in existing_wbs6}
+        existing_wbs7 = session.exec(
+            select(Wbs7).where(Wbs7.commessa_id == commessa.id)
+        ).all()
+        wbs7_matches: list[Wbs7NormalizationMatch] = []
+
+        for node in existing_wbs7:
+            parent = existing_wbs6_map.get(node.wbs6_id)
+            parent_code = parent.code if parent else None
+            target_parent_code = wbs6_target_by_id.get(node.wbs6_id, parent_code)
+            candidates = reference_wbs7.get(target_parent_code or "", [])
+            direct_candidate = None
+            if candidates and node.code:
+                direct_candidate = next(
+                    (cand for cand in candidates if cand["code"] == node.code),
+                    None,
+                )
+            if direct_candidate:
+                wbs7_matches.append(
+                    Wbs7NormalizationMatch(
+                        current_code=node.code,
+                        current_description=node.description,
+                        wbs6_code=parent_code,
+                        suggested_code=direct_candidate["code"],
+                        suggested_description=direct_candidate["description"],
+                        suggested_wbs6_code=target_parent_code,
+                        score=1.0,
+                        reason="code_match",
+                    )
+                )
+                continue
+
+            best7 = cls._pick_best_by_description(
+                node.description,
+                candidates,
+            )
+            if best7 and best7[1] >= min_score_wbs7:
+                target = best7[0]
+                wbs7_matches.append(
+                    Wbs7NormalizationMatch(
+                        current_code=node.code,
+                        current_description=node.description,
+                        wbs6_code=parent_code,
+                        suggested_code=target["code"],
+                        suggested_description=target["description"],
+                        suggested_wbs6_code=target_parent_code,
+                        score=best7[1],
+                        reason="description_match",
+                    )
+                )
+            else:
+                wbs7_matches.append(
+                    Wbs7NormalizationMatch(
+                        current_code=node.code,
+                        current_description=node.description,
+                        wbs6_code=parent_code,
+                        suggested_code=None,
+                        suggested_description=None,
+                        suggested_wbs6_code=None,
+                        score=0.0,
+                        reason="unmatched",
+                    )
+                )
+
+        return WbsNormalizationResult(wbs6=wbs6_matches, wbs7=wbs7_matches)
 
     @classmethod
     def update_spatial_node(
@@ -511,6 +701,48 @@ class WbsImportService:
             .where(VoceOfferta.voce_id.in_(voce_ids))
             .values(updated_at=now)
         )
+
+    @classmethod
+    def _pick_best_by_description(
+        cls,
+        description: Optional[str],
+        candidates: Sequence[dict],
+    ) -> Optional[tuple[dict, float]]:
+        needle = cls._normalize_match_text(description)
+        if not needle or not candidates:
+            return None
+        best_score = 0.0
+        best_candidate: Optional[dict] = None
+        for candidate in candidates:
+            score = cls._similarity_score(needle, candidate.get("norm_desc", ""))
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+        if best_candidate is None:
+            return None
+        return best_candidate, best_score
+
+    @staticmethod
+    def _normalize_match_text(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        cleaned = re.sub(r"[^a-z0-9]+", " ", value.lower())
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    @staticmethod
+    def _similarity_score(left: str, right: str) -> float:
+        if not left or not right:
+            return 0.0
+        ratio = SequenceMatcher(None, left, right).ratio()
+        left_tokens = set(left.split())
+        right_tokens = set(right.split())
+        overlap = (
+            len(left_tokens & right_tokens) / max(len(left_tokens), len(right_tokens))
+            if left_tokens and right_tokens
+            else 0.0
+        )
+        return max(ratio, overlap)
 
 
 class _WbsPersistenceContext:

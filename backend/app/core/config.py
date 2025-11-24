@@ -123,6 +123,14 @@ class Settings(BaseSettings):
     nlp_max_length: int = 256
     nlp_auto_export_onnx: bool = True
     nlp_onnx_opset: int = 17
+    enable_price_embeddings: bool = Field(
+        default=False,
+        description="Calcola embedding per elenco prezzi/import (consigliato False su SQLite/CPU).",
+    )
+    enable_property_extraction: bool = Field(
+        default=False,
+        description="Esegue estrazione proprietà da descrizione listino/import.",
+    )
 
     # WBS predictors (roBERTino)
     wbs6_model_path: Path | None = Field(

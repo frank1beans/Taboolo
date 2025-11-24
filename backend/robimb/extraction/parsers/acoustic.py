@@ -25,6 +25,10 @@ _ACOUSTIC_PATTERN = re.compile(
         |
         alpha\s*w
         |
+        a\s*w
+        |
+        aw
+        |
         coefficiente\s+(?:di\s+)?(?:assorbimento\s+)?α\s*w
         |
         coefficiente\s+(?:di\s+)?(?:assorbimento\s+)?alpha\s*w

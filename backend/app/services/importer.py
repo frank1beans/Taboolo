@@ -83,6 +83,38 @@ _CODE_REGEX = re.compile(
 class ImportService:
     """Gestisce il caricamento di file Excel e la creazione delle voci di computo."""
 
+    @staticmethod
+    def _sanitize_impresa_label(label: str | None) -> str | None:
+        """Normalizza il nome impresa rimuovendo suffissi duplicati e spazi superflui."""
+        if not label:
+            return None
+        text = label.strip()
+        if not text:
+            return None
+        text = re.sub(r"\s*\(\d+\)\s*$", "", text).strip()
+        return text or None
+
+    @staticmethod
+    def _get_or_create_impresa(session: Session, label: str | None) -> Optional[Impresa]:
+        """Recupera o crea un'impresa normalizzando il nome."""
+        if not label:
+            return None
+        text = ImportService._sanitize_impresa_label(label)
+        if not text:
+            return None
+        normalized = re.sub(r"\s+", " ", text).lower()
+        if not normalized:
+            return None
+        existing = session.exec(
+            select(Impresa).where(Impresa.normalized_label == normalized)
+        ).first()
+        if existing:
+            return existing
+        impresa = Impresa(label=text, normalized_label=normalized)
+        session.add(impresa)
+        session.flush()
+        return impresa
+
     def import_computo_progetto(
         self,
         *,
@@ -258,7 +290,7 @@ class ImportService:
             )
 
         impresa = self._sanitize_impresa_label(impresa)
-        impresa_entry = self.get_or_create_impresa(impresa)
+        impresa_entry = self._get_or_create_impresa(session, impresa)
 
         progetto_voci = session.exec(
             select(VoceComputo)
@@ -356,6 +388,14 @@ class ImportService:
             if parser_result.totale_quantita is not None
             else None
         )
+        ritorno_quantita_totale = (
+            excel_quantita_totale
+            if excel_quantita_totale is not None
+            else sum(Decimal(str(voce.quantita or 0)) for voce in parser_result.voci)
+        )
+        progetto_quantita_float = float(progetto_quantita_totale or 0)
+        ritorno_quantita_float = float(ritorno_quantita_totale or 0)
+        delta_quantita_totale = ritorno_quantita_float - progetto_quantita_float
 
         total_voci = len(progetto_voci)
         alignment = _align_return_rows(
@@ -378,6 +418,12 @@ class ImportService:
             legacy_pairs=legacy_pairs,
             excel_only_labels=return_only_labels,
             excel_only_groups=excel_only_groups,
+            quantity_mismatches=progress_quantity_mismatches if ritorno_con_progressivi else None,
+            quantity_totals={
+                "progetto": progetto_quantita_float,
+                "ritorno": ritorno_quantita_float,
+                "delta": delta_quantita_totale,
+            },
         )
 
         warning_message: str | None = None
@@ -1073,40 +1119,42 @@ def _align_progressive_return(
                     price_from_match = corrected_price
 
             project_quantity = voce_progetto.quantita
-            if (
-                quant_from_match not in (None,)
-                and project_quantity not in (None, 0)
-                and not _quantities_match(project_quantity, quant_from_match)
-            ):
-                progress_quantity_mismatches.append(
-                    f"{_shorten_label(_voce_label(voce_progetto))} (ritorno="
-                    f"{_format_quantity_for_warning(quant_from_match)} vs computo="
-                    f"{_format_quantity_for_warning(project_quantity)})"
-                )
-            if project_quantity is not None:
-                quantita = project_quantity
-            elif quant_from_match not in (None,):
+            if quant_from_match not in (None,) and project_quantity not in (None, 0):
+                if not _quantities_match(project_quantity, quant_from_match):
+                    progress_quantity_mismatches.append(
+                        f"{_shorten_label(_voce_label(voce_progetto))} (ritorno="
+                        f"{_format_quantity_for_warning(quant_from_match)} vs computo="
+                        f"{_format_quantity_for_warning(project_quantity)})"
+                    )
+            # preferisci la quantità del ritorno, se presente; altrimenti usa quella di progetto
+            if quant_from_match not in (None,):
                 quantita = quant_from_match
-            if price_from_match is not None:
-                prezzo_unitario = round(price_from_match, 4)
-                if quantita not in (None, 0):
-                    importo = round(prezzo_unitario * quantita, 2)
-                if progress_key:
-                    existing_price = progress_price_registry.get(progress_key)
-                    if existing_price is None:
-                        progress_price_registry[progress_key] = prezzo_unitario
-                    elif not _prices_match(existing_price, prezzo_unitario):
-                        progress_price_conflicts.append(
-                            f"{_shorten_label(_voce_label(voce_progetto))}"
-                            f" ({format(existing_price, '.4f')} vs {format(prezzo_unitario, '.4f')})"
-                        )
+            elif project_quantity is not None:
+                quantita = project_quantity
+        if price_from_match is not None:
+            prezzo_unitario = round(price_from_match, 4)
+            if quantita not in (None, 0):
+                importo = round(prezzo_unitario * quantita, 2)
+            if progress_key:
+                existing_price = progress_price_registry.get(progress_key)
+                if existing_price is None:
+                    progress_price_registry[progress_key] = prezzo_unitario
+                elif not _prices_match(existing_price, prezzo_unitario):
+                    progress_price_conflicts.append(
+                        f"{_shorten_label(_voce_label(voce_progetto))}"
+                        f" ({format(existing_price, '.4f')} vs {format(prezzo_unitario, '.4f')})"
+                    )
             elif import_from_match is not None:
                 importo = _ceil_amount(import_from_match)
-                if quantita not in (None, 0) and importo is not None:
+                if importo is not None and quantita not in (None, 0):
                     prezzo_unitario = round(importo / quantita, 4)
+                else:
+                    prezzo_unitario = prezzo_unitario
 
         if quantita is None and voce_progetto.quantita is not None:
             quantita = voce_progetto.quantita
+        if quantita in (0, 0.0):
+            importo = 0.0
 
         parsed_voce = _build_parsed_from_progetto(
             voce_progetto,
@@ -1249,9 +1297,12 @@ def _align_totals_return(
             if quantita not in (None, 0):
                 importo = price_from_match * quantita
             lock_price_override = True
-        elif import_from_match is not None and quantita not in (None, 0):
-            prezzo_unitario = import_from_match / quantita
+        elif import_from_match is not None:
             importo = import_from_match
+            if quantita not in (None, 0):
+                prezzo_unitario = import_from_match / quantita
+            else:
+                prezzo_unitario = None
             lock_price_override = True
 
         if quantita is None and voce_progetto.quantita is not None:
@@ -1550,23 +1601,57 @@ class _WbsNormalizeContext:
         wbs7 = self._ensure_wbs7(wbs6, wbs7_code, wbs7_desc)
         resolved_price_list_id = price_list_item_id or self.resolve_price_list_item_id(parsed)
 
-        key = (wbs6.id, wbs7.id if wbs7 else None, parsed.codice, parsed.ordine)
+        target_wbs7_id = wbs7.id if wbs7 else None
+        key = (wbs6.id, target_wbs7_id, parsed.codice, parsed.ordine)
         voce = self.voce_cache.get(key)
+        if not voce and legacy:
+            voce = self.get_voce_from_legacy(legacy.id)
         if not voce:
             voce = self.session.exec(
                 select(VoceNorm).where(
                     VoceNorm.commessa_id == self.commessa_id,
                     VoceNorm.wbs6_id == wbs6.id,
-                    VoceNorm.wbs7_id == (wbs7.id if wbs7 else None),
+                    VoceNorm.wbs7_id == target_wbs7_id,
                     VoceNorm.codice == parsed.codice,
                     VoceNorm.ordine == parsed.ordine,
                 )
             ).first()
-        if not voce:
+        if voce:
+            updated = False
+            if voce.wbs6_id != wbs6.id:
+                voce.wbs6_id = wbs6.id
+                updated = True
+            if voce.wbs7_id != target_wbs7_id:
+                voce.wbs7_id = target_wbs7_id
+                updated = True
+            if voce.codice != parsed.codice:
+                voce.codice = parsed.codice
+                updated = True
+            if voce.ordine != parsed.ordine:
+                voce.ordine = parsed.ordine
+                updated = True
+            if parsed.descrizione and voce.descrizione != parsed.descrizione:
+                voce.descrizione = parsed.descrizione
+                updated = True
+            if parsed.unita_misura and voce.unita_misura != parsed.unita_misura:
+                voce.unita_misura = parsed.unita_misura
+                updated = True
+            if parsed.note and voce.note != parsed.note:
+                voce.note = parsed.note
+                updated = True
+            if legacy and voce.legacy_vocecomputo_id is None:
+                voce.legacy_vocecomputo_id = legacy.id
+                updated = True
+            if resolved_price_list_id and voce.price_list_item_id is None:
+                voce.price_list_item_id = resolved_price_list_id
+                updated = True
+            if updated:
+                self.session.add(voce)
+        else:
             voce = VoceNorm(
                 commessa_id=self.commessa_id,
                 wbs6_id=wbs6.id,
-                wbs7_id=wbs7.id if wbs7 else None,
+                wbs7_id=target_wbs7_id,
                 codice=parsed.codice,
                 descrizione=parsed.descrizione,
                 unita_misura=parsed.unita_misura,
@@ -1577,12 +1662,6 @@ class _WbsNormalizeContext:
             )
             self.session.add(voce)
             self.session.flush()
-        elif legacy and voce.legacy_vocecomputo_id is None:
-            voce.legacy_vocecomputo_id = legacy.id
-            self.session.add(voce)
-        if resolved_price_list_id and voce.price_list_item_id is None:
-            voce.price_list_item_id = resolved_price_list_id
-            self.session.add(voce)
         self.voce_cache[key] = voce
         if voce.legacy_vocecomputo_id:
             self.voce_by_legacy[voce.legacy_vocecomputo_id] = voce
@@ -1998,6 +2077,22 @@ def _select_sheet(workbook, requested_name: str | None):
             if name.lower() == requested_name.lower():
                 return workbook[name]
         raise ValueError(f"Il foglio '{requested_name}' non è presente nel file Excel caricato")
+
+    def _has_codice_header(sheet) -> bool:
+        # cerca una riga che contenga la parola CODICE (o simile) nelle prime 50 righe
+        for row in sheet.iter_rows(max_row=50, values_only=True):
+            if not row:
+                continue
+            for cell in row:
+                if isinstance(cell, str) and "codice" in cell.strip().lower():
+                    return True
+        return False
+
+    for name in workbook.sheetnames:
+        sheet = workbook[name]
+        if _has_codice_header(sheet):
+            return sheet
+
     return workbook.active
 
 
@@ -2870,6 +2965,8 @@ def _build_matching_report(
     legacy_pairs: Sequence[tuple[VoceComputo | None, ParsedVoce]],
     excel_only_labels: Sequence[str] | None = None,
     excel_only_groups: Sequence[str] | None = None,
+    quantity_mismatches: Sequence[str] | None = None,
+    quantity_totals: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     matched: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
@@ -2894,6 +2991,13 @@ def _build_matching_report(
     }
     if excel_only_groups:
         report["excel_only_groups"] = list(excel_only_groups)
+    if quantity_mismatches:
+        report["quantity_mismatches"] = list(quantity_mismatches)
+    if quantity_totals:
+        report["quantity_totals"] = quantity_totals
+        report["quantity_total_mismatch"] = (
+            abs(quantity_totals.get("delta", 0.0)) > 1e-6
+        )
     return report
 
 

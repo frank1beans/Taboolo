@@ -106,7 +106,7 @@ def _iter_cross(text: str) -> Iterator[DimensionMatch]:
 
         # Skip if the pattern looks like a product code (numbers without proper separators)
         # e.g., ". 23 326 " should be rejected (spaces instead of 'x')
-        if 'x' not in raw_match.lower():
+        if 'x' not in raw_match.lower() and '×' not in raw_match:
             # No 'x' separator found - likely not a dimension
             continue
 

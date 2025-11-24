@@ -384,11 +384,21 @@ export const api = {
     commessaId: number | string,
     file: File,
     preventivoId?: string | null,
+    options?: {
+      enableEmbeddings?: boolean;
+      enablePropertyExtraction?: boolean;
+    },
   ): Promise<ApiSixImportReport> {
     const formData = new FormData();
     formData.append("file", file);
     if (preventivoId) {
       formData.append("preventivo_id", preventivoId);
+    }
+    if (options?.enableEmbeddings) {
+      formData.append("compute_embeddings", "true");
+    }
+    if (options?.enablePropertyExtraction) {
+      formData.append("extract_properties", "true");
     }
     return apiFetch<ApiSixImportReport>(`/commesse/${commessaId}/import-six`, {
       method: "POST",

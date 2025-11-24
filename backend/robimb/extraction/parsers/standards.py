@@ -50,10 +50,6 @@ def parse_standards(text: str, lexicon: Optional[Dict[str, str]] = None) -> Iter
             if re.search(r'\b(?:cod(?:ice)?|art(?:icolo)?|modello|tipo|mod|riferimento|rif)\.?\s*$', lookback):
                 continue
 
-        # Skip if at the very beginning of text (likely a BIM code)
-        if start_pos < 10 and not re.search(r'\b(?:norma|standard|uni|en|iso|din)\b', text[:start_pos].lower()):
-            continue
-
         # Only yield if prefix is a known standard or contains keywords
         description = prefixes.get(prefix)
         if description or prefix in {'UNI', 'EN', 'ISO', 'DIN', 'ASTM', 'BS', 'ANSI'}:

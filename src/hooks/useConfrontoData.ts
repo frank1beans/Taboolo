@@ -20,6 +20,7 @@ interface VoceConfronto {
       quantita: number;
       prezzoUnitario: number;
       importoTotale: number;
+      deltaQuantita?: number | null;
       criticita?: string;
       note?: string;
     }
@@ -127,6 +128,7 @@ function mapConfrontoResponse(data: ApiConfrontoOfferte): ConfrontoData {
             quantita: offerta.quantita ?? 0,
             prezzoUnitario: offerta.prezzo_unitario ?? 0,
             importoTotale: offerta.importo_totale ?? 0,
+            deltaQuantita: offerta.delta_quantita ?? null,
             criticita: offerta.criticita ?? undefined,
             note: offerta.note ?? undefined,
           },

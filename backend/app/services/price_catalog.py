@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+import time
 from typing import Any, Iterable, Sequence
 
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session
 
 from app.db.models import Commessa, PriceListItem
@@ -31,6 +34,9 @@ class PriceCatalogService:
         preventivo_id: str | None,
         price_list_labels: dict[str, str],
         preferred_lists: Sequence[str],
+        *,
+        compute_embeddings: bool | None = None,
+        extract_properties: bool | None = None,
         base_list_keywords: Sequence[str] = ("base",),
     ) -> None:
         session.exec(
@@ -88,15 +94,13 @@ class PriceCatalogService:
                 "preferred_price_lists": preferred_lists_payload,
             }
 
-            if self.property_extractor:
+            do_extract = extract_properties if extract_properties is not None else settings.enable_property_extraction
+            if do_extract and self.property_extractor:
                 try:
                     if callable(getattr(self.property_extractor, "extract_properties", None)):
                         extracted = self.property_extractor.extract_properties(entry, session=session)
                     elif callable(self.property_extractor):
-                        try:
-                            extracted = self.property_extractor(entry, session)  # preferisce sessione se supportata
-                        except TypeError:
-                            extracted = self.property_extractor(entry)
+                        extracted = self._call_property_extractor(entry, session)
                     else:
                         extracted = None
                     if extracted:
@@ -104,7 +108,8 @@ class PriceCatalogService:
                 except Exception as exc:  # pragma: no cover - robustezza
                     logger.exception("Errore nell'estrazione proprietà da descrizione: %s", exc)
 
-            service = self.embedding_service
+            do_embeddings = compute_embeddings if compute_embeddings is not None else settings.enable_price_embeddings
+            service = self.embedding_service if do_embeddings else None
             if service is not None:
                 # Usa effective_price_lists per generare embedding consistenti
                 embedding_input = {
@@ -140,6 +145,30 @@ class PriceCatalogService:
         if models:
             session.add_all(models)
 
+    def _call_property_extractor(self, entry: dict[str, Any], session: Session) -> Any:
+        """
+        Esegue l'estrazione proprietà con retry in caso di lock su SQLite.
+
+        Se dopo alcuni tentativi il DB è ancora locked, salta l'estrazione per non interrompere l'import.
+        """
+        delays = (0.1, 0.3, 0.5)
+        for attempt, delay in enumerate(delays, start=1):
+            try:
+                return self.property_extractor(entry, session)  # preferisce sessione se supportata
+            except TypeError:
+                # Fallback a chiamata senza sessione
+                return self.property_extractor(entry)
+            except OperationalError as exc:
+                if isinstance(exc.orig, sqlite3.OperationalError) and "database is locked" in str(exc.orig):
+                    logger.warning(
+                        "Property extractor retry %s/%s per lock SQLite", attempt, len(delays)
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+        logger.warning("Property extractor disabilitato per lock persistente: salto estrazione")
+        return None
+
     def _prepare_embedding_metadata(self, entry: dict[str, Any]) -> dict[str, Any] | None:
         if not self.embedding_service:
             return None
@@ -165,11 +194,12 @@ class PriceCatalogService:
         return f"{commessa_tag}::{normalized_item}::prd::{normalized_product}"
 
 
+from app.core.config import settings
 from .nlp import semantic_embedding_service
 from .property_extraction import extract_properties_auto
 
 
 price_catalog_service = PriceCatalogService(
-    embedding_service=semantic_embedding_service,
-    property_extractor=extract_properties_auto,
+    embedding_service=semantic_embedding_service if settings.enable_price_embeddings else None,
+    property_extractor=extract_properties_auto if settings.enable_property_extraction else None,
 )

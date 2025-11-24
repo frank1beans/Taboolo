@@ -20,13 +20,16 @@ class FlowRateMatch:
     unit: str = "l/min"
 
 
-# Pattern for flow rate: "5.7 l/min", "10 litri/minuto", "3,5 l/s", etc.
+# Pattern for flow rate: "5.7 l/min", "10 litri/minuto", "3,5 l/s", "12 l/h", "0.01 m3/s", etc.
 _FLOW_RATE_PATTERN = re.compile(
     r"""
     (?P<value>[\d.,]+)\s*
     (?P<unit>
-        l/min|l/m|litri/min|litri/minuto|l/s|l/sec|litri/s|litri/secondo|
+        l/min|litri/min|litri/minuto|
+        l/h|litri/ora|
+        l/s|l/sec|litri/s|litri/secondo|
         m³/h|mc/h|m3/h|metri\s*cubi/h|metri\s*cubi/ora|
+        m³/s|mc/s|m3/s|metri\s*cubi/s|metri\s*cubi/secondo|
         gpm|galloni/min
     )
     """,
@@ -39,8 +42,12 @@ def _normalize_to_l_per_min(value: float, unit: str) -> float:
     unit_lower = unit.lower().replace(" ", "")
 
     # Already in l/min
-    if unit_lower in {"l/min", "l/m", "litri/min", "litri/minuto"}:
+    if unit_lower in {"l/min", "litri/min", "litri/minuto"}:
         return value
+
+    # l/h to l/min (divide by 60)
+    if unit_lower in {"l/h", "litri/ora"}:
+        return value / 60.0
 
     # l/s to l/min (multiply by 60)
     if unit_lower in {"l/s", "l/sec", "litri/s", "litri/secondo"}:
@@ -49,6 +56,10 @@ def _normalize_to_l_per_min(value: float, unit: str) -> float:
     # m³/h to l/min (1 m³ = 1000 l, 1 h = 60 min)
     if unit_lower in {"m³/h", "mc/h", "m3/h", "metricubi/h", "metricubi/ora"}:
         return value * 1000.0 / 60.0
+
+    # m³/s to l/min (1 m³ = 1000 l, 1 s = 1/60 min)
+    if unit_lower in {"m³/s", "mc/s", "m3/s", "metricubi/s", "metricubisecondo", "metricubi/secondo"}:
+        return value * 1000.0 * 60.0
 
     # gpm (gallons per minute) to l/min (1 gallon ≈ 3.785 l)
     if unit_lower == "gpm" or "galloni" in unit_lower:
