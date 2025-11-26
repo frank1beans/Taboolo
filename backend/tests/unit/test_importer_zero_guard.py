@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.excel.parser import ParsedVoce
-from app.services.importer import _detect_forced_zero_violations
+from app.services.importers.matching.legacy import _detect_forced_zero_violations
 
 
 class ZeroGuardDetectionTestCase(unittest.TestCase):

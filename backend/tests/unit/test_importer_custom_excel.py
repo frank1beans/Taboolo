@@ -5,7 +5,7 @@ from tempfile import NamedTemporaryFile
 
 from openpyxl import Workbook
 
-from app.services.importer import _parse_custom_return_excel
+from app.services.importers.parser import _parse_custom_return_excel
 
 
 def test_parse_custom_return_excel_builds_parsed_voci() -> None:

@@ -1,8 +1,7 @@
 from types import SimpleNamespace
 
 from app.excel.parser import ParsedVoce
-from app.services.importer import (
-    _levenshtein_ratio,
+from app.services.importers.matching.legacy import (
     _match_by_description_similarity,
 )
 
@@ -23,8 +22,9 @@ def _parsed_voce(description: str) -> ParsedVoce:
     )
 
 
-def test_levenshtein_ratio_identical_strings() -> None:
-    assert _levenshtein_ratio("parete mobile vetro", "parete mobile vetro") == 1.0
+# Test removed: _levenshtein_ratio non più utilizzato, sostituito con token overlap
+# def test_levenshtein_ratio_identical_strings() -> None:
+#     assert _levenshtein_ratio("parete mobile vetro", "parete mobile vetro") == 1.0
 
 
 def test_match_by_description_similarity_selects_closest_candidate() -> None:
