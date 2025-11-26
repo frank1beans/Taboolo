@@ -776,25 +776,39 @@ export default function ElencoPrezziNew() {
     );
   }, [priceCatalog]);
 
+  const selectedWbsNode = useMemo<FrontendWbsNode | null>(() => {
+    if (!selectedNodeId) return null;
+
+    const findNode = (nodes: FrontendWbsNode[]): FrontendWbsNode | null => {
+      for (const node of nodes) {
+        if (node.id === selectedNodeId) return node;
+        if (node.children) {
+          const found = findNode(node.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    return findNode(wbsTree);
+  }, [selectedNodeId, wbsTree]);
+
   // Filter data based on selected WBS node
   const filteredData = useMemo(() => {
     let dataset = enrichedData;
 
     // Filter by WBS node selection
-    if (selectedNodeId) {
-      const selectedNode = wbsTree.find((n) => n.id === selectedNodeId);
-      if (!selectedNode) {
-        for (const wbs6 of wbsTree) {
-          const wbs7 = wbs6.children.find((c) => c.id === selectedNodeId);
-          if (wbs7) {
-            dataset = dataset.filter(
-              (item) => item.wbs6_code === wbs6.code && item.wbs7_code === wbs7.code,
-            );
-            break;
-          }
-        }
-      } else {
-        dataset = dataset.filter((item) => item.wbs6_code === selectedNode.code);
+    if (selectedWbsNode) {
+      if (selectedWbsNode.level === 6) {
+        dataset = dataset.filter((item) => item.wbs6_code === selectedWbsNode.code);
+      } else if (selectedWbsNode.level === 7) {
+        const parentWbs6 =
+          selectedWbsNode.path.find((segment) => segment.level === 6)?.code ||
+          wbsTree.find((node) => node.children?.some((child) => child.id === selectedWbsNode.id))?.code;
+        dataset = dataset.filter(
+          (item) =>
+            item.wbs6_code === parentWbs6 && item.wbs7_code === selectedWbsNode.code,
+        );
       }
     }
 
@@ -804,7 +818,7 @@ export default function ElencoPrezziNew() {
     }
 
     return dataset;
-  }, [enrichedData, selectedNodeId, wbsTree, activeTab, allMissingPricesSet]);
+  }, [enrichedData, selectedWbsNode, wbsTree, activeTab, allMissingPricesSet]);
 
 
   const imprese = useMemo(() => Array.from(offerKeyMetadata.values()), [offerKeyMetadata]);
@@ -1215,11 +1229,13 @@ export default function ElencoPrezziNew() {
 
   // Build active filters
   const activeFiltersArray: ActiveFilter[] = [
-    ...(selectedNodeId
+    ...(selectedWbsNode
       ? [{
           id: "wbs",
           label: "WBS",
-          value: selectedNodeId,
+          value: selectedWbsNode.code
+            ? `${selectedWbsNode.code}${selectedWbsNode.description ? ` · ${selectedWbsNode.description}` : ""}`
+            : selectedWbsNode.description || selectedNodeId || "",
           onRemove: () => setSelectedNodeId(null),
         }]
       : []),

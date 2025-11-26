@@ -30,6 +30,7 @@ from app.services.importer import ImportService
 from app.services.price_catalog import price_catalog_service
 
 logger = logging.getLogger(__name__)
+MEASURE_QUANTUM = Decimal("0.01")
 
 
 class PreventivoSelectionError(ValueError):
@@ -95,9 +96,8 @@ class _AggregatedVoce:
     unita: str | None
     progressivo: int | None
     ordine: int
-    quantita: float = 0.0
+    quantita: Decimal = field(default_factory=lambda: Decimal("0"))
     notes: set[str] = field(default_factory=set)
-    has_lump_sum: bool = False
     progressivi: set[int] = field(default_factory=set)
     lista_ids: set[str] = field(default_factory=set)
     reference_ids: set[int] = field(default_factory=set)
@@ -106,8 +106,7 @@ class _AggregatedVoce:
 
 @dataclass
 class _MisuraContext:
-    sign: int
-    product: float | None
+    product: Decimal | None
     references: list[int]
 
     @property
@@ -376,18 +375,10 @@ class SixImportService:
 
     @staticmethod
     def _scalar_count(session: Session, statement) -> int:
-        result = session.exec(statement).one()
-        scalar = result
-        if isinstance(result, tuple):
-            scalar = result[0]
-        else:
-            try:
-                scalar = result[0]  # type: ignore[index]
-            except Exception:  # noqa: BLE001
-                pass
-        if scalar is None:
+        value = session.exec(statement).scalar_one()
+        if value is None:
             return 0
-        return int(scalar)
+        return int(value)
 
 
 class SixParser:
@@ -422,15 +413,15 @@ class SixParser:
         self._price_list_alias_priorities: dict[str, int] = {}
         self.primary_price_list_id: str | None = None
         self._primary_price_list_priority: int = -1
-        self._raw_progressivo_quantities: dict[int, float] = {}
-        self._progressivo_references: dict[int, list[tuple[int, float]]] = {}
-        self._resolved_progressivo_quantities: dict[int, float | None] = {}
+        self._raw_progressivo_quantities: dict[int, Decimal] = {}
+        self._progressivo_references: dict[int, list[tuple[int, Decimal]]] = {}
+        self._resolved_progressivo_quantities: dict[int, Decimal | None] = {}
         self.last_used_product_ids: set[str] | None = None
         self._parse_price_lists()
         self._parse_units()
         self._parse_products()
-        self._parse_preventivi_metadata()
         self._precompute_raw_quantities()
+        self._parse_preventivi_metadata()
 
     def list_preventivi(self) -> list[PreventivoOption]:
         return list(self.preventivi.values())
@@ -479,10 +470,7 @@ class SixParser:
         }
 
     def export_price_catalog(self) -> list[dict[str, Any]]:
-        aggregated: dict[
-            tuple[str, str, str, str, str | None],
-            dict[str, Any],
-        ] = {}
+        aggregated: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         allowed_products = self.last_used_product_ids
         for prodotto_id in sorted(self.products.keys()):
             if allowed_products is not None and prodotto_id not in allowed_products:
@@ -560,17 +548,16 @@ class SixParser:
 
             progressivo = _to_int(rilevazione.attrib.get("progressivo"))
             comments = self._collect_comments(rilevazione)
-            lowered_comments = [text.lower() for text in comments]
             reference_entries = self._collect_reference_entries(rilevazione)
             raw_quantita = self._compute_quantity(rilevazione)
-            quantita = raw_quantita if raw_quantita is not None else 0.0
+            quantita: Decimal = raw_quantita if raw_quantita is not None else Decimal("0")
             lista_id = self._map_price_list_id(
                 rilevazione.attrib.get("listaQuotazioneId")
             )
 
             missing_refs: list[int] = []
             if reference_entries:
-                ref_total = 0.0
+                ref_total = Decimal("0")
                 for ref_prog, factor in reference_entries:
                     ref_value = self._resolved_progressivo_quantities.get(ref_prog)
                     if ref_value is None:
@@ -578,7 +565,7 @@ class SixParser:
                     if ref_value is None:
                         missing_refs.append(ref_prog)
                         continue
-                    ref_total += factor * ref_value
+                    ref_total += Decimal(str(factor)) * ref_value
                 if ref_total:
                     quantita += ref_total
             if missing_refs:
@@ -588,8 +575,6 @@ class SixParser:
                     progressivo,
                     missing_refs,
                 )
-
-            has_lump_sum = any("a corpo" in text for text in lowered_comments)
 
             prezzo = product.pick_price(lista_id, price_preference)
             if prezzo is None:
@@ -633,43 +618,36 @@ class SixParser:
             if reference_entries:
                 entry.reference_ids.update(ref_prog for ref_prog, _ in reference_entries)
 
-            quantita, line_amount = self._calculate_line_amount(
-                quantita,
-                prezzo,
-                has_lump_sum,
-            )
-            if quantita > 0:
-                entry.quantita += quantita
+            quantita, line_amount = self._calculate_line_amount(quantita, prezzo)
+            entry.quantita += quantita
             if line_amount is not None:
                 entry.line_amount_total += line_amount
-            entry.has_lump_sum = entry.has_lump_sum or has_lump_sum
             entry.notes.update(comments)
 
         total_amount_decimal = Decimal("0.00")
         voci: list[ParsedVoce] = []
         for key in ordered_keys:
             entry = aggregates[key]
-            quantita = entry.quantita if entry.quantita > 0 else 0.0
+            quantita = entry.quantita
             prezzo = entry.prezzo
             importo: float | None = None
 
-            line_amount_decimal = entry.line_amount_total.quantize(
-                Decimal("0.01"), rounding=ROUND_UP
-            )
-            importo = float(line_amount_decimal)
-            total_amount_decimal += line_amount_decimal
-
-            if quantita > 0:
-                quantita = self._ceil_quantity_value(quantita)
+            # Arrotonda la quantità a 2 decimali solo all'output finale
+            quantita_rounded = quantita.quantize(MEASURE_QUANTUM, rounding=ROUND_HALF_UP)
+            quantita_float = float(quantita_rounded)
+            importo_decimal = entry.line_amount_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            importo = float(importo_decimal)
+            total_amount_decimal += importo_decimal
 
             code = entry.product.code
             if importo is None:
                 logger.warning("Voce %s ignorata: importo non valido", code)
                 continue
 
-            # Se quantita è zero, importa a zero (anche se a corpo)
-            if quantita <= 0:
-                quantita = 0.0
+            # Se la quantità o l'importo sono trascurabili, azzera per evitare -0.00
+            if abs(quantita_float) < 1e-9:
+                quantita_float = 0.0
+            if abs(importo) < 1e-9:
                 importo = 0.0
 
             note = self._build_note(sorted(entry.notes))
@@ -696,7 +674,6 @@ class SixParser:
                 },
                 "progressivi": sorted(entry.progressivi),
                 "reference_progressivi": sorted(entry.reference_ids),
-                "has_lump_sum": entry.has_lump_sum,
                 "wbs6_code": entry.product.wbs6_code,
                 "wbs7_code": entry.product.wbs7_code,
                 "wbs_path": meta_wbs_path,
@@ -710,7 +687,7 @@ class SixParser:
                 descrizione=entry.product.description,
                 wbs_levels=entry.wbs_levels,
                 unita_misura=entry.unita,
-                quantita=self._ceil_quantity_value(quantita) if quantita > 0 else 0.0,
+                quantita=quantita_float,
                 prezzo_unitario=prezzo,
                 importo=importo,
                 note=note,
@@ -929,13 +906,16 @@ class SixParser:
         return None
 
     @staticmethod
-    def _parse_numeric_value(raw: str | None) -> float | None:
+    def _parse_numeric_value(raw: str | None) -> Decimal | None:
         """
         Interpreta il contenuto testuale di una cella misura.
         Supporta espressioni semplici (somma, sottrazione, moltiplicazione, divisione)
         con separatore decimale sia punto che virgola e operatori moltiplicativi
         scritti come "x", "·" o "×". Converte anche separatori di lista ";"/a capo
         in somme.
+
+        Restituisce Decimal per preservare la precisione decimale ed evitare
+        errori di rappresentazione floating-point.
         """
         if not raw:
             return None
@@ -946,14 +926,14 @@ class SixParser:
             return None
 
         allowed_bin_ops = {
-            ast.Add: operator.add,
-            ast.Sub: operator.sub,
-            ast.Mult: operator.mul,
-            ast.Div: operator.truediv,
+            ast.Add: lambda a, b: a + b,
+            ast.Sub: lambda a, b: a - b,
+            ast.Mult: lambda a, b: a * b,
+            ast.Div: lambda a, b: a / b,
         }
-        allowed_unary_ops = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+        allowed_unary_ops = {ast.UAdd: lambda a: +a, ast.USub: lambda a: -a}
 
-        def _eval(node: ast.AST) -> float:
+        def _eval(node: ast.AST) -> Decimal:
             if isinstance(node, ast.Expression):
                 return _eval(node.body)
             if isinstance(node, ast.BinOp) and type(node.op) in allowed_bin_ops:
@@ -964,18 +944,51 @@ class SixParser:
                 operand = _eval(node.operand)
                 return allowed_unary_ops[type(node.op)](operand)
             if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-                return float(node.value)
+                return Decimal(str(node.value))
             # Python <=3.7 compat
             if hasattr(ast, "Num") and isinstance(node, ast.Num):  # type: ignore[attr-defined]
-                return float(node.n)  # type: ignore[attr-defined]
+                return Decimal(str(node.n))  # type: ignore[attr-defined]
             raise ValueError(f"Unsupported expression node: {type(node).__name__}")
 
+        def _evaluate_expression(expr_text: str) -> Decimal:
+            parsed = ast.parse(expr_text, mode="eval")
+            return _eval(parsed)
+
+        # Gestione espressioni condizionali (es. "2.07*1<4" → 1 se 2.07<4, altrimenti 0)
+        comparison_match = re.match(r"^(.+?)([<>]=?)(.+)$", cleaned)
+        if comparison_match:
+            left_expr = comparison_match.group(1).strip()
+            operator = comparison_match.group(2)
+            right_expr = comparison_match.group(3).strip()
+            try:
+                left_val = _evaluate_expression(left_expr)
+                right_val = _evaluate_expression(right_expr)
+                # Applica il confronto e restituisce 1 (vero) o 0 (falso)
+                if operator == "<":
+                    result = Decimal("1") if left_val < right_val else Decimal("0")
+                elif operator == "<=":
+                    result = Decimal("1") if left_val <= right_val else Decimal("0")
+                elif operator == ">":
+                    result = Decimal("1") if left_val > right_val else Decimal("0")
+                elif operator == ">=":
+                    result = Decimal("1") if left_val >= right_val else Decimal("0")
+                else:
+                    return None
+                return result
+            except Exception:
+                return None
+
         try:
-            expr = ast.parse(cleaned, mode="eval")
-            return float(_eval(expr))
+            result = _evaluate_expression(cleaned)
+            # Arrotonda secondo la granularità di misura configurata (0.01 di default)
+            return result.quantize(MEASURE_QUANTUM, rounding=ROUND_HALF_UP)
         except Exception:
-            # fallback: tenta un semplice float
-            return _to_float(cleaned)
+            # fallback: tenta un semplice Decimal
+            float_val = _to_float(cleaned)
+            if float_val is None:
+                return None
+            result = Decimal(str(float_val))
+            return result.quantize(MEASURE_QUANTUM, rounding=ROUND_HALF_UP)
 
     def _collect_comments(self, rilevazione: ET.Element) -> list[str]:
         comments: list[str] = []
@@ -988,31 +1001,34 @@ class SixParser:
                 comments.append(cleaned)
         return comments
 
+    @staticmethod
+    def _normalize_measure(value: Decimal | None) -> Decimal | None:
+        """Arrotonda il prodotto delle misure alla granularità configurata."""
+        if value is None:
+            return None
+        return value.quantize(MEASURE_QUANTUM, rounding=ROUND_HALF_UP)
+
     def _parse_misura_context(self, misura: ET.Element) -> _MisuraContext:
-        operation = (misura.attrib.get("operazione") or "").strip()
-        sign = -1 if operation == "-" else 1
-        grouped: dict[int, float] = {}
+        grouped: dict[int, Decimal] = {}
+        all_cells_raw: list[tuple[int, str, Decimal | None]] = []
         for cella in misura.findall(f"{self.ns}prvCella"):
-            value = self._parse_numeric_value(cella.attrib.get("testo"))
-            if value is None:
-                continue
+            raw_text = cella.attrib.get("testo")
+            value = self._parse_numeric_value(raw_text)
             pos_label = cella.attrib.get("posizione") or "0"
             try:
                 position = int(pos_label)
             except ValueError:
                 position = 0
-            grouped[position] = grouped.get(position, 0.0) + value
-        product = None
-        if grouped:
-            # Regola: se tutte le celle valgono 0, la quantità è 0.
-            # Se almeno una cella è valorizzata, ignora gli zeri e moltiplica solo i valori non nulli.
-            non_zero = [v for v in grouped.values() if v not in (0, 0.0)]
-            if not non_zero:
-                product = 0.0
-            else:
-                product = 1.0
-                for value in non_zero:
-                    product *= value
+            all_cells_raw.append((position, raw_text or "", value))
+
+            if value is None:
+                continue
+            grouped[position] = grouped.get(position, Decimal("0")) + value
+
+        if all_cells_raw:
+            logger.debug("Celle misura: %s -> grouped=%s", all_cells_raw, grouped)
+
+        # Raccogli commenti e riferimenti
         references: list[int] = []
         for commento in misura.findall(f"{self.ns}prvCommento"):
             text = commento.attrib.get("estesa") or commento.text
@@ -1030,13 +1046,34 @@ class SixParser:
                     references.append(int(raw))
                 except ValueError:
                     continue
-        return _MisuraContext(sign=sign, product=product, references=references)
+
+        # Calcola il prodotto secondo le regole:
+        # 1. Riga senza valori → ignora (product = None)
+        # 2. Riga con valori, alcuni sono 0 esplicito → prodotto = 0
+        # 3. Riga con valori tutti non-zero → moltiplica tutti
+        # NOTA: celle vuote vengono ignorate (non sono zeri espliciti)
+        # NOTA: commenti senza valori vengono ignorati (non contribuiscono al calcolo)
+        product: Decimal | None = None
+        if grouped:
+            has_zero = any(v == Decimal("0") for v in grouped.values())
+            if has_zero:
+                product = Decimal("0")
+                logger.debug("Misura con zero esplicito: grouped=%s -> product=0", grouped)
+            else:
+                product = Decimal("1")
+                for value in grouped.values():
+                    product *= value
+                logger.debug("Misura calcolata: grouped=%s -> product=%s", grouped, product)
+            product = self._normalize_measure(product)
+        # else: nessun valore numerico → product = None (ignorata)
+
+        return _MisuraContext(product=product, references=references)
 
     def _collect_reference_entries(
         self,
         rilevazione: ET.Element,
-    ) -> list[tuple[int, float]]:
-        entries: list[tuple[int, float]] = []
+    ) -> list[tuple[int, Decimal]]:
+        entries: list[tuple[int, Decimal]] = []
         current_sign = 1
         for misura in rilevazione.findall(f"{self.ns}prvMisura"):
             operation = (misura.attrib.get("operazione") or "").strip()
@@ -1047,9 +1084,9 @@ class SixParser:
             context = self._parse_misura_context(misura)
             if not context.references:
                 continue
-            multiplier = context.product if context.product is not None else 1.0
+            multiplier = context.product if context.product is not None else Decimal("1")
             for ref_prog in context.references:
-                entries.append((ref_prog, current_sign * multiplier))
+                entries.append((ref_prog, Decimal(str(current_sign)) * multiplier))
         return entries
 
     @staticmethod
@@ -1064,8 +1101,8 @@ class SixParser:
                 seen.add(text)
         return "\n".join(ordered) if ordered else None
 
-    def _compute_quantity(self, rilevazione: ET.Element) -> float | None:
-        total = 0.0
+    def _compute_quantity(self, rilevazione: ET.Element) -> Decimal | None:
+        total = Decimal("0")
         current_sign = 1
         for misura in rilevazione.findall(f"{self.ns}prvMisura"):
             context = self._parse_misura_context(misura)
@@ -1079,34 +1116,25 @@ class SixParser:
             if context.product is None:
                 continue
             total += current_sign * context.product
-        if total != 0:
-            return round(total, 6)
-        return None
+        return total if abs(total) > Decimal("1e-12") else None
 
     def _calculate_line_amount(
         self,
-        quantita: float,
+        quantita: Decimal,
         prezzo: float | None,
-        has_lump_sum: bool,
-    ) -> tuple[float, Decimal | None]:
+    ) -> tuple[Decimal, Decimal | None]:
         if prezzo is None:
             return quantita, None
 
         decimal_price = Decimal(str(prezzo))
-        if quantita > 0:
-            rounded_quantity = Decimal(str(quantita)).quantize(
-                Decimal("0.000001"), rounding=ROUND_HALF_UP
-            )
-            line_amount = (rounded_quantity * decimal_price).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            return float(rounded_quantity), line_amount
+        if quantita == Decimal("0"):
+            return Decimal("0"), Decimal("0.00")
 
-        # Quantità nulla: non forzare a 1 per le lavorazioni a corpo, mantieni importo zero
-        if has_lump_sum:
-            return 0.0, Decimal("0.00")
-
-        return quantita, Decimal("0.00")
+        # Mantieni la precisione completa, arrotonda solo l'importo
+        line_amount = (quantita * decimal_price).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        return quantita, line_amount
 
     def _parse_groups(self) -> None:
         for gruppo in self.root.findall(f".//{self.ns}gruppo"):
@@ -1250,16 +1278,6 @@ class SixParser:
         if canonical not in self.price_lists:
             self.price_lists[canonical] = lista_id.strip()
         return canonical
-
-    @staticmethod
-    def _ceil_quantity_value(value: float) -> float:
-        decimal_value = Decimal(str(value))
-        return float(decimal_value.quantize(Decimal("0.000001"), rounding=ROUND_UP))
-
-    @staticmethod
-    def _ceil_amount_value(value: float) -> float:
-        decimal_value = Decimal(str(value))
-        return float(decimal_value.quantize(Decimal("0.01"), rounding=ROUND_UP))
 
     def _build_price_preference(self, primary: str | None) -> list[str]:
         """Ordina le liste prezzi da provare: prima quella del preventivo, poi le preferite globali."""
@@ -1406,7 +1424,7 @@ class SixParser:
             rilevazioni_nodes = preventivo.findall(f"{self.ns}prvRilevazione")
             rilevazioni_count = len(rilevazioni_nodes)
             items_count = 0
-            total_importo = 0.0
+            total_importo = Decimal("0")
             if rilevazioni_nodes:
                 product_ids = {
                     node.attrib.get("prodottoId")
@@ -1424,29 +1442,22 @@ class SixParser:
                     lista_id = self._map_price_list_id(
                         rilevazione.attrib.get("listaQuotazioneId")
                     )
-                    prezzo = product.pick_price(
+                    prezzo: float | None = product.pick_price(
                         lista_id,
                         self._build_price_preference(self._map_price_list_id(price_list_id)),
                     )
                     if prezzo is None:
                         continue
-                    progressivo = _to_int(rilevazione.attrib.get("progressivo"))
-                    quantita: float = 0.0
-                    if progressivo is not None:
-                        resolved = self._resolved_progressivo_quantities.get(progressivo)
-                        raw = self._raw_progressivo_quantities.get(progressivo)
-                        if resolved is not None:
-                            quantita = float(resolved)
-                        elif raw is not None:
-                            quantita = float(raw)
-                        else:
-                            quantita = float(self._compute_quantity(rilevazione) or 0.0)
-                    else:
-                        quantita = float(self._compute_quantity(rilevazione) or 0.0)
-                    try:
-                        total_importo += float(quantita) * float(prezzo)
-                    except Exception:  # noqa: BLE001
-                        continue
+                    # Allinea il totale preview con il calcolo principale: quantità dirette + riferimenti
+                    quantita_dec: Decimal = self._compute_quantity(rilevazione) or Decimal("0")
+                    for ref_prog, factor in self._collect_reference_entries(rilevazione):
+                        ref_val = self._resolved_progressivo_quantities.get(ref_prog)
+                        if ref_val is None:
+                            ref_val = self._raw_progressivo_quantities.get(ref_prog)
+                        if ref_val is None:
+                            continue
+                        quantita_dec += factor * ref_val
+                    total_importo += quantita_dec * Decimal(str(prezzo))
 
             mapped_price_list = self._map_price_list_id(price_list_id)
             price_list_label = None
@@ -1464,7 +1475,11 @@ class SixParser:
                 price_list_label=price_list_label,
                 rilevazioni=rilevazioni_count,
                 items=items_count,
-                total_importo=round(total_importo, 2) if total_importo else None,
+                total_importo=float(
+                    total_importo.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                )
+                if total_importo
+                else None,
             )
             self.preventivi[internal_id] = option
             self._preventivo_nodes[internal_id] = preventivo
@@ -1505,15 +1520,34 @@ class SixParser:
     def _precompute_raw_quantities(self) -> None:
         self._raw_progressivo_quantities.clear()
         self._progressivo_references.clear()
-        for rilevazione in self.root.findall(f".//{self.ns}prvRilevazione"):
-            progressivo = _to_int(rilevazione.attrib.get("progressivo"))
-            if progressivo is None:
-                continue
-            quantity = self._compute_quantity(rilevazione)
-            self._raw_progressivo_quantities[progressivo] = quantity or 0.0
-            references = self._collect_reference_entries(rilevazione)
-            if references:
-                self._progressivo_references[progressivo] = references
+        
+        progressivo_owner: dict[int, str] = {}
+        
+        for preventivo in self.root.findall(f".//{self.ns}preventivo"):
+            preventivo_id = preventivo.attrib.get("preventivoId") or "unknown"
+            
+            for rilevazione in preventivo.findall(f"{self.ns}prvRilevazione"):
+                progressivo = _to_int(rilevazione.attrib.get("progressivo"))
+                if progressivo is None:
+                    continue
+                
+                # Check for conflicts
+                if progressivo in progressivo_owner:
+                    existing_owner = progressivo_owner[progressivo]
+                    if existing_owner != preventivo_id:
+                        raise ValueError(
+                            f"Progressivo {progressivo} usato in più preventivi: "
+                            f"{existing_owner} e {preventivo_id}"
+                        )
+                else:
+                    progressivo_owner[progressivo] = preventivo_id
+                
+                quantity = self._compute_quantity(rilevazione)
+                self._raw_progressivo_quantities[progressivo] = quantity or Decimal("0")
+                references = self._collect_reference_entries(rilevazione)
+                if references:
+                    self._progressivo_references[progressivo] = references
+        
         self._resolved_progressivo_quantities.clear()
         all_progressivi = set(self._raw_progressivo_quantities.keys()) | set(
             self._progressivo_references.keys()
@@ -1525,7 +1559,7 @@ class SixParser:
         self,
         progressivo: int,
         stack: set[int],
-    ) -> float | None:
+    ) -> Decimal | None:
         cached = self._resolved_progressivo_quantities.get(progressivo)
         if cached is not None:
             return cached
@@ -1535,7 +1569,7 @@ class SixParser:
             raise ValueError(message)
 
         stack.add(progressivo)
-        base_value = self._raw_progressivo_quantities.get(progressivo) or 0.0
+        base_value = self._raw_progressivo_quantities.get(progressivo) or Decimal("0")
         total = base_value
         for ref_prog, factor in self._progressivo_references.get(progressivo, []):
             ref_value = self._resolve_progressivo_quantity(ref_prog, stack)
@@ -1544,7 +1578,7 @@ class SixParser:
             total += factor * ref_value
         stack.remove(progressivo)
 
-        resolved = round(total, 6) if total != 0 else None
+        resolved = total if abs(total) > Decimal("1e-12") else None
         self._resolved_progressivo_quantities[progressivo] = resolved
         return resolved
 

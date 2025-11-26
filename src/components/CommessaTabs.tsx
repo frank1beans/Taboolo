@@ -13,6 +13,7 @@ interface CommessaTabsProps {
 
 const tabs = [
   { to: "overview", label: "Computo & riepilogo" },
+  { to: "import", label: "Import" },
   { to: "price-catalog", label: "Elenco prezzi" },
   { to: "preventivo", label: "Preventivo" },
   { to: "analisi", label: "Analisi & confronti" },

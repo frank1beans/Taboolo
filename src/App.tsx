@@ -6,26 +6,27 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { Layout } from "./components/Layout";
-import Home from "./pages/Home";
-import Commesse from "./pages/Commesse";
-import Settings from "./pages/Settings";
-import CommessaWbsSettings from "./pages/CommessaWbsSettings";
-import CommessaSettings from "./pages/CommessaSettings";
-import PreventivoNew from "./pages/PreventivoNew";
-import ElencoPrezziNew from "./pages/ElencoPrezziNew";
-import PriceCatalogExplorerNew from "./pages/PriceCatalogExplorerNew";
-import CommessaLayout from "./pages/CommessaLayout";
-import CommessaDetail from "./pages/CommessaDetail";
-import CommessaAnalysisPage from "./pages/CommessaAnalysisPage";
-import AnalisiAvanzate from "./pages/AnalisiAvanzate";
-import CommessaPreventivoPage from "./pages/CommessaPreventivoPage";
-import RitorniGaraBatch from "./pages/RitorniGaraBatch";
-import TestGrafici from "./pages/TestGrafici";
-import NotFound from "./pages/NotFound";
-import Login from "./pages/Login";
-import Register from "./pages/Register";
-import Profile from "./pages/Profile";
-import AdminArea from "./pages/AdminArea";
+import AdminArea from "./pages/admin/AdminArea";
+import Login from "./pages/auth/Login";
+import Register from "./pages/auth/Register";
+import CommessaAnalysisPage from "./pages/commesse/analysis/CommessaAnalysisPage";
+import AnalisiAvanzate from "./pages/commesse/analysis/AnalisiAvanzate";
+import RitorniGaraBatch from "./pages/commesse/analysis/RitorniGaraBatch";
+import CommessaImportPage from "./pages/commesse/import/CommessaImportPage";
+import CommessaLayout from "./pages/commesse/layout/CommessaLayout";
+import CommessaDetail from "./pages/commesse/overview/CommessaDetail";
+import CommessaPreventivoPage from "./pages/commesse/preventivo/CommessaPreventivoPage";
+import PreventivoNew from "./pages/commesse/preventivo/PreventivoNew";
+import ElencoPrezziNew from "./pages/commesse/pricing/ElencoPrezziNew";
+import Commesse from "./pages/commesse/Commesse";
+import CommessaSettings from "./pages/commesse/settings/CommessaSettings";
+import CommessaWbsSettings from "./pages/commesse/settings/CommessaWbsSettings";
+import NotFound from "./pages/errors/NotFound";
+import Home from "./pages/home/Home";
+import TestGrafici from "./pages/lab/TestGrafici";
+import PriceCatalogExplorerNew from "./pages/price-catalog/PriceCatalogExplorerNew";
+import Profile from "./pages/profile/Profile";
+import Settings from "./pages/settings/Settings";
 import { AuthProvider } from "./features/auth/AuthContext";
 import { RequireAuth, RequireRole } from "./features/auth/RequireAuth";
 
@@ -58,6 +59,7 @@ const App = () => (
                 <Route path="/commesse/:id/*" element={<CommessaLayout />}>
                   <Route index element={<Navigate to="overview" replace />} />
                   <Route path="overview" element={<CommessaDetail />} />
+                  <Route path="import" element={<CommessaImportPage />} />
                   <Route path="price-catalog" element={<ElencoPrezziNew />} />
                   <Route path="elenco-prezzi" element={<Navigate to="price-catalog" replace />} />
                   <Route path="preventivo" element={<CommessaPreventivoPage />} />

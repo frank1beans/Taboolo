@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
+import { useCallback } from "react";
 import { ColDef, ColGroupDef } from "ag-grid-community";
 import { DataTable, type ColumnAggregation } from "@/components/DataTable";
 import { useConfrontoData } from "@/hooks/useConfrontoData";
@@ -6,7 +7,7 @@ import { formatCurrency, getGridThemeClass } from "@/lib/grid-utils";
 import { WBSFilterPanel } from "@/components/WBSFilterPanel";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
-import type { FrontendWbsNode } from "@/types/api";
+import type { ApiWbs7Node, FrontendWbsNode } from "@/types/api";
 import { TablePage, type TableStat, type ActiveFilter } from "@/components/ui/table-page";
 import { QuickFilters } from "@/components/ui/table-filters";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTheme } from "next-themes";
+import React from "react";
 
 interface ConfrontoOfferteProps {
   commessaId: string;
@@ -88,6 +90,38 @@ const getImpresaHeaderLabel = (impresa: ImpresaView) => {
   return impresa.nomeImpresa;
 };
 
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+const getDeltaVisual = (val: number | null | undefined) => {
+  if (val == null) {
+    return { text: "–", bg: undefined, color: undefined, icon: "" };
+  }
+  const abs = clamp(Math.abs(val), 0, 100);
+  const opacity = 0.12 + abs / 900; // più visibile
+  // Riferimento: progetto. Più alto = peggio (rosso), più basso = meglio (verde).
+  const isGood = val < 0;
+  const bg = isGood
+    ? `rgba(34,197,94,${opacity})`
+    : val > 0
+      ? `rgba(239,68,68,${opacity})`
+      : `rgba(148,163,184,0.2)`;
+  const color = isGood ? "#166534" : val > 0 ? "#b91c1c" : "#475569";
+  const icon = isGood ? "↓" : val > 0 ? "↑" : "•";
+  const text = `${val > 0 ? "+" : ""}${val.toFixed(2)}%`;
+  return { text, bg, color, icon };
+};
+
+const getHeatmapBg = (delta: number | null | undefined, baseBg: string) => {
+  if (delta == null) return baseBg;
+  const abs = clamp(Math.abs(delta), 0, 80);
+  const tint = 0.1 + abs / 500; // intensità leggermente più alta
+  return delta > 0
+    ? `rgba(239,68,68,${tint})`
+    : delta < 0
+      ? `rgba(34,197,94,${tint})`
+      : baseBg;
+};
+
 export function ConfrontoOfferte({
   commessaId,
   selectedRound,
@@ -125,18 +159,85 @@ export function ConfrontoOfferte({
 
   const wbsData = useMemo<FrontendWbsNode[]>(() => {
     if (!wbsDataRaw?.wbs6) return [];
-    return wbsDataRaw.wbs6.map(node => ({
-      id: String(node.id),
-      code: node.code || "",
-      description: node.description || "",
-      level: 6,
-      importo: 0,
-      children: [],
-      path: []
-    }));
+    const wbs7ByParent = new Map<number, ApiWbs7Node[]>();
+    (wbsDataRaw.wbs7 ?? []).forEach((node) => {
+      const bucket = wbs7ByParent.get(node.wbs6_id);
+      if (bucket) {
+        bucket.push(node);
+      } else {
+        wbs7ByParent.set(node.wbs6_id, [node]);
+      }
+    });
+
+    return wbsDataRaw.wbs6.map((node) => {
+      const basePath = [
+        {
+          level: 6,
+          code: node.code ?? "",
+          description: node.description ?? "",
+        },
+      ];
+      const children: FrontendWbsNode[] = (wbs7ByParent.get(node.id) ?? []).map((child) => ({
+        id: `wbs7-${child.id}`,
+        code: child.code || "",
+        description: child.description || "",
+        level: 7,
+        importo: 0,
+        children: [],
+        path: [
+          ...basePath,
+          {
+            level: 7,
+            code: child.code ?? "",
+            description: child.description ?? "",
+          },
+        ],
+      }));
+
+      return {
+        id: String(node.id),
+        code: node.code || "",
+        description: node.description || "",
+        level: 6,
+        importo: 0,
+        children,
+        path: basePath,
+      };
+    });
   }, [wbsDataRaw]);
 
   const [selectedWbsNodeId, setSelectedWbsNodeId] = useState<string | null>(null);
+  const selectedWbsFilter = useMemo<
+    { wbs6: string | null; wbs7: string | null; label: string } | null
+  >(() => {
+    if (!selectedWbsNodeId) return null;
+
+    for (const wbs6 of wbsData) {
+      if (wbs6.id === selectedWbsNodeId || wbs6.code === selectedWbsNodeId) {
+        return {
+          wbs6: wbs6.code ?? null,
+          wbs7: null,
+          label: wbs6.code
+            ? `${wbs6.code}${wbs6.description ? ` · ${wbs6.description}` : ""}`
+            : wbs6.description || wbs6.id,
+        };
+      }
+
+      for (const wbs7 of wbs6.children ?? []) {
+        if (wbs7.id === selectedWbsNodeId || wbs7.code === selectedWbsNodeId) {
+          return {
+            wbs6: wbs6.code ?? null,
+            wbs7: wbs7.code ?? null,
+            label: wbs7.code
+              ? `${wbs7.code}${wbs7.description ? ` · ${wbs7.description}` : ""}`
+              : wbs7.description || wbs7.id,
+          };
+        }
+      }
+    }
+
+    return null;
+  }, [selectedWbsNodeId, wbsData]);
 
   const roundOptions = useMemo(() => confrontoData?.rounds ?? [], [confrontoData?.rounds]);
 
@@ -312,14 +413,19 @@ export function ConfrontoOfferte({
     if (showOnlyQuantityMismatch) {
       rows = rows.filter((row) => row.hasQuantityMismatch);
     }
-    if (!selectedWbsNodeId) return rows;
+    if (!selectedWbsFilter) return rows;
 
     return rows.filter((row) => {
-      const wbs6Match = row.wbs6Code === selectedWbsNodeId;
-      const wbs7Match = row.wbs7Code === selectedWbsNodeId;
-      return wbs6Match || wbs7Match;
+      if (!selectedWbsFilter.wbs6) return false;
+      if (selectedWbsFilter.wbs7) {
+        return (
+          row.wbs6Code === selectedWbsFilter.wbs6 &&
+          row.wbs7Code === selectedWbsFilter.wbs7
+        );
+      }
+      return row.wbs6Code === selectedWbsFilter.wbs6;
     });
-  }, [rowData, selectedWbsNodeId, showOnlyQuantityMismatch]);
+  }, [rowData, selectedWbsFilter, showOnlyQuantityMismatch]);
 
   const exportColumns = useMemo(() => {
     const baseExportCols = [
@@ -394,7 +500,78 @@ export function ConfrontoOfferte({
     return baseExportCols;
   }, [filteredImprese]);
 
+  const excelStyles = useMemo(
+    () => [
+      {
+        id: "excel-delta-good",
+        interior: { color: "#d1fae5", pattern: "Solid" },
+        font: { color: "#166534", bold: true },
+        numberFormat: { format: "0.00%" },
+      },
+      {
+        id: "excel-delta-bad",
+        interior: { color: "#fee2e2", pattern: "Solid" },
+        font: { color: "#b91c1c", bold: true },
+        numberFormat: { format: "0.00%" },
+      },
+      {
+        id: "excel-price-best",
+        interior: { color: "#e8f5e9", pattern: "Solid" },
+        borders: { borderBottom: { color: "#22c55e", lineStyle: "Continuous", weight: 2 } },
+        numberFormat: { format: '€#,##0.00' },
+      },
+      {
+        id: "excel-price-worst",
+        interior: { color: "#ffebee", pattern: "Solid" },
+        borders: { borderBottom: { color: "#ef4444", lineStyle: "Continuous", weight: 2 } },
+        numberFormat: { format: '€#,##0.00' },
+      },
+      {
+        id: "excel-currency",
+        numberFormat: { format: '€#,##0.00' },
+      },
+    ],
+    []
+  );
+
+  const excelProcessCell = useCallback((params: any) => {
+    const val = params.value;
+    if (val == null || val === "") return "";
+
+    const colId = params.column?.getColId?.() ?? "";
+
+    // Percentuali: converti in valore percentuale Excel (es. 12.3 => 0.123)
+    if (colId.includes("delta")) {
+      const num = typeof val === "number" ? val : Number(String(val).replace("%", "").replace(",", "."));
+      if (Number.isFinite(num)) return num / 100;
+      return val;
+    }
+
+    // Numeri/currency già numerici
+    if (typeof val === "number") return val;
+
+    const parsed = Number(String(val).replace(/[€\s]/g, "").replace(".", "").replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : val;
+  }, []);
+
   const columnDefs = useMemo<(ColDef<ConfrontoRow> | ColGroupDef<ConfrontoRow>)[]>(() => {
+    const getRowPriceExtremes = (row: ConfrontoRow) => {
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      filteredImprese.forEach((impresa) => {
+        const fieldPrefix = getImpresaFieldPrefix(impresa);
+        const val = row?.[`${fieldPrefix}_prezzoUnitario`] as number | null;
+        if (typeof val === "number" && Number.isFinite(val)) {
+          min = Math.min(min, val);
+          max = Math.max(max, val);
+        }
+      });
+      return {
+        min: min !== Number.POSITIVE_INFINITY ? min : null,
+        max: max !== Number.NEGATIVE_INFINITY ? max : null,
+      };
+    };
+
     const baseColumns: ColDef<ConfrontoRow>[] = [
       {
         field: "codice",
@@ -432,8 +609,18 @@ export function ConfrontoOfferte({
         headerName: "Δ Quantità",
         width: 120,
         valueGetter: (params) => (params.data?.hasQuantityMismatch ? "Diff." : ""),
+        cellRenderer: (params) => {
+          const hasMismatch = params.data?.hasQuantityMismatch;
+          if (!hasMismatch) return "";
+          return (
+            <span className="inline-flex items-center gap-1 font-semibold text-destructive">
+              <span aria-hidden>▲▼</span>
+              Diff.
+            </span>
+          );
+        },
         cellClass: (params) =>
-          params.data?.hasQuantityMismatch ? "text-red-600 font-semibold" : "text-muted-foreground",
+          params.data?.hasQuantityMismatch ? "text-destructive font-semibold" : "text-muted-foreground",
         tooltipValueGetter: (params) =>
           params.data?.hasQuantityMismatch
             ? "Quantità ritorno diversa dal progetto per almeno un'impresa"
@@ -446,6 +633,7 @@ export function ConfrontoOfferte({
         type: "numericColumn",
         valueFormatter: (params) => formatCurrency(params.value),
         cellStyle: { fontWeight: "500" },
+        cellClass: "excel-currency",
       },
       {
         field: "importoTotaleProgetto",
@@ -454,6 +642,7 @@ export function ConfrontoOfferte({
         type: "numericColumn",
         valueFormatter: (params) => formatCurrency(params.value),
         cellStyle: { fontWeight: "500" },
+        cellClass: "excel-currency",
       },
       {
         field: "mediaPrezzi",
@@ -462,6 +651,7 @@ export function ConfrontoOfferte({
         type: "numericColumn",
         valueFormatter: (params) => (params.value != null ? formatCurrency(params.value) : "-"),
         cellStyle: { backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc", fontWeight: "500" },
+        cellClass: "excel-currency",
       },
       {
         field: "minimoPrezzi",
@@ -469,6 +659,7 @@ export function ConfrontoOfferte({
         width: 140,
         type: "numericColumn",
         valueFormatter: (params) => (params.value != null ? formatCurrency(params.value) : "-"),
+        cellClass: "excel-currency",
       },
       {
         field: "massimoPrezzi",
@@ -476,6 +667,7 @@ export function ConfrontoOfferte({
         width: 140,
         type: "numericColumn",
         valueFormatter: (params) => (params.value != null ? formatCurrency(params.value) : "-"),
+        cellClass: "excel-currency",
       },
       {
         field: "deviazionePrezzi",
@@ -483,6 +675,7 @@ export function ConfrontoOfferte({
         width: 150,
         type: "numericColumn",
         valueFormatter: (params) => (params.value != null ? formatCurrency(params.value) : "-"),
+        cellClass: "excel-currency",
       },
     ];
 
@@ -493,6 +686,40 @@ export function ConfrontoOfferte({
       { bg: isDarkMode ? "#2a1f30" : "#fdf2f8", border: isDarkMode ? "#3b2f3f" : "#f5d0e6" },
       { bg: isDarkMode ? "#202331" : "#f8fafc", border: isDarkMode ? "#2f3240" : "#e2e8f0" },
     ];
+
+    const getRowExtremes = (row: ConfrontoRow) => {
+      let minDelta = Number.POSITIVE_INFINITY;
+      let maxDelta = Number.NEGATIVE_INFINITY;
+      let minPrice = Number.POSITIVE_INFINITY;
+      let maxPrice = Number.NEGATIVE_INFINITY;
+      let deltaCount = 0;
+      let priceCount = 0;
+
+      filteredImprese.forEach((impresa) => {
+        const prefix = getImpresaFieldPrefix(impresa);
+        const delta = row?.[`${prefix}_deltaPerc`] as number | null;
+        const price = row?.[`${prefix}_prezzoUnitario`] as number | null;
+        if (typeof delta === "number" && Number.isFinite(delta)) {
+          minDelta = Math.min(minDelta, delta);
+          maxDelta = Math.max(maxDelta, delta);
+          deltaCount += 1;
+        }
+        if (typeof price === "number" && Number.isFinite(price)) {
+          minPrice = Math.min(minPrice, price);
+          maxPrice = Math.max(maxPrice, price);
+          priceCount += 1;
+        }
+      });
+
+      return {
+        minDelta: deltaCount > 0 ? minDelta : null,
+        maxDelta: deltaCount > 0 ? maxDelta : null,
+        minPrice: priceCount > 0 ? minPrice : null,
+        maxPrice: priceCount > 0 ? maxPrice : null,
+        deltaCount,
+        priceCount,
+      };
+    };
 
     const groupedColumns: ColGroupDef<ConfrontoRow>[] = filteredImprese.map((impresa, index) => {
       const color = palette[index % palette.length];
@@ -554,8 +781,41 @@ export function ConfrontoOfferte({
             width: 120,
             type: "numericColumn",
             valueFormatter: (params) => (params.value != null ? formatCurrency(params.value) : "-"),
-            cellStyle: {
-              backgroundColor: color.bg,
+            cellStyle: (params) => {
+              const delta = params.data?.[`${fieldPrefix}_deltaPerc`] as number | null;
+              const { minDelta, maxDelta, minPrice, maxPrice, deltaCount, priceCount } = getRowExtremes(params.data);
+              const val = params.value as number | null;
+              // Best/Worst solo se ci sono almeno 2 offerte con delta; se no, si passa ai prezzi.
+              const useDelta = deltaCount > 1;
+              const usePrice = !useDelta && priceCount > 1;
+              const isBest =
+                (useDelta && minDelta != null && delta != null && delta === minDelta) ||
+                (usePrice && minPrice != null && val != null && val === minPrice);
+              const isWorst =
+                (useDelta && maxDelta != null && delta != null && delta === maxDelta) ||
+                (usePrice && maxPrice != null && val != null && val === maxPrice);
+              return {
+                backgroundColor: getHeatmapBg(delta, color.bg),
+                border: isBest ? "2px solid #22c55e" : isWorst ? "2px solid #ef4444" : undefined,
+                fontWeight: isBest || isWorst ? 700 : undefined,
+              };
+            },
+            cellClass: (params) => {
+              const classes: string[] = ["excel-currency"];
+              const delta = params.data?.[`${fieldPrefix}_deltaPerc`] as number | null;
+              const { minDelta, maxDelta, minPrice, maxPrice, deltaCount, priceCount } = getRowExtremes(params.data);
+              const val = params.value as number | null;
+              const useDelta = deltaCount > 1;
+              const usePrice = !useDelta && priceCount > 1;
+              const isBest =
+                (useDelta && minDelta != null && delta != null && delta === minDelta) ||
+                (usePrice && minPrice != null && val != null && val === minPrice);
+              const isWorst =
+                (useDelta && maxDelta != null && delta != null && delta === maxDelta) ||
+                (usePrice && maxPrice != null && val != null && val === maxPrice);
+              if (isBest) classes.push("excel-price-best");
+              if (isWorst) classes.push("excel-price-worst");
+              return classes;
             },
           },
           {
@@ -567,6 +827,7 @@ export function ConfrontoOfferte({
             cellStyle: {
               backgroundColor: color.bg,
             },
+            cellClass: "excel-currency",
           },
           {
             headerName: "Delta progetto",
@@ -578,7 +839,34 @@ export function ConfrontoOfferte({
               const val = params.value as number;
               return `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`;
             },
-            cellStyle: deltaCellStyle,
+            cellStyle: (params) => {
+              const style = deltaCellStyle(params);
+              const val = params.value as number | null;
+              const visual = getDeltaVisual(val);
+              return {
+                ...style,
+                backgroundColor: visual.bg ?? style.backgroundColor,
+                color: visual.color ?? style.color,
+                fontWeight: "700",
+              };
+            },
+            cellRenderer: (params) => {
+              const val = params.value as number | null;
+              const visual = getDeltaVisual(val);
+              return (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px]">
+                  <span aria-hidden>{visual.icon}</span>
+                  {visual.text}
+                </span>
+              );
+            },
+            cellClass: (params) => {
+              const val = params.value as number | null;
+              if (val == null) return [];
+              if (val < 0) return ["excel-delta-good"];
+              if (val > 0) return ["excel-delta-bad"];
+              return [];
+            },
           },
           {
             headerName: "Delta media",
@@ -590,7 +878,34 @@ export function ConfrontoOfferte({
               const val = params.value as number;
               return `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`;
             },
-            cellStyle: deltaCellStyle,
+            cellStyle: (params) => {
+              const style = deltaCellStyle(params);
+              const val = params.value as number | null;
+              const visual = getDeltaVisual(val);
+              return {
+                ...style,
+                backgroundColor: visual.bg ?? style.backgroundColor,
+                color: visual.color ?? style.color,
+                fontWeight: "700",
+              };
+            },
+            cellRenderer: (params) => {
+              const val = params.value as number | null;
+              const visual = getDeltaVisual(val);
+              return (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px]">
+                  <span aria-hidden>{visual.icon}</span>
+                  {visual.text}
+                </span>
+              );
+            },
+            cellClass: (params) => {
+              const val = params.value as number | null;
+              if (val == null) return [];
+              if (val < 0) return ["excel-delta-good"];
+              if (val > 0) return ["excel-delta-bad"];
+              return [];
+            },
           },
         ],
       };
@@ -628,11 +943,11 @@ export function ConfrontoOfferte({
 
   // Build active filters
   const activeFiltersArray: ActiveFilter[] = [
-    ...(selectedWbsNodeId
+    ...(selectedWbsFilter
       ? [{
           id: "wbs",
           label: "WBS",
-          value: selectedWbsNodeId,
+          value: selectedWbsFilter.label,
           onRemove: () => setSelectedWbsNodeId(null),
         }]
       : []),
@@ -675,72 +990,99 @@ export function ConfrontoOfferte({
     },
   ];
 
+  const filtersToolbar = (
+    <div className="flex w-full flex-wrap items-center gap-2">
+      {roundFilters.length > 0 && <QuickFilters filters={roundFilters} />}
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        <Button
+          variant={showOnlyQuantityMismatch ? "secondary" : "outline"}
+          size="sm"
+          onClick={() => setShowOnlyQuantityMismatch((prev) => !prev)}
+          className="h-8 gap-1.5"
+        >
+          Δ Quantità
+        </Button>
+        {wbsData.length > 0 && (
+          <Button
+            variant={isSidebarOpen ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className="h-8 gap-1.5"
+          >
+            <PanelRight className="h-4 w-4" />
+            WBS
+          </Button>
+        )}
+        {onNavigateToCharts && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onNavigateToCharts}
+            className="h-8 gap-1.5"
+          >
+            <BarChart3 className="h-4 w-4" />
+            Grafici
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <TablePage
       title="Confronto Offerte"
-      description="Analisi comparativa prezzi unitari tra imprese per round"
+      description="Analisi comparativa prezzi unitari tra imprese per round - usa colori e icone per leggere i delta a colpo d'occhio"
       stats={tableStats}
       activeFilters={activeFiltersArray}
       onClearAllFilters={() => {
         setSelectedWbsNodeId(null);
         handleRoundSelect("all");
       }}
-      filters={
-        roundFilters.length > 0 ? (
-          <QuickFilters filters={roundFilters} />
-        ) : undefined
-      }
-      actions={
-        <div className="flex items-center gap-2">
-          <Button
-            variant={showOnlyQuantityMismatch ? "secondary" : "outline"}
-            size="sm"
-            onClick={() => setShowOnlyQuantityMismatch((prev) => !prev)}
-            className="h-8 gap-1.5"
-          >
-            Δ Quantità
-          </Button>
-          {wbsData.length > 0 && (
-            <Button
-              variant={isSidebarOpen ? "secondary" : "outline"}
-              size="sm"
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="h-8 gap-1.5"
-            >
-              <PanelRight className="h-4 w-4" />
-              WBS
-            </Button>
-          )}
-          {onNavigateToCharts && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onNavigateToCharts}
-              className="h-8 gap-1.5"
-            >
-              <BarChart3 className="h-4 w-4" />
-              Grafici
-            </Button>
-          )}
-        </div>
-      }
+      filters={filtersToolbar}
       className="h-full"
     >
-        <DataTable
-          data={filteredRowData}
-          columnDefs={columnDefs}
-          height="70vh"
-          headerHeight={72}
-          enableSearch={true}
-          enableExport={true}
-          enableColumnToggle={true}
-          exportFileName={`confronto-offerte-${commessaId}`}
-          exportColumns={exportColumns}
-          getRowId={(params) => params.data.id}
-          className={getGridThemeClass(isDarkMode)}
-          aggregations={aggregations}
-          showAggregationFooter={true}
-        />
+        <div className="flex flex-col gap-3">
+          <DataTable
+            data={filteredRowData}
+            columnDefs={columnDefs}
+            height="70vh"
+            headerHeight={72}
+            enableSearch={true}
+            enableExport={true}
+            enableColumnToggle={true}
+            exportFileName={`confronto-offerte-${commessaId}`}
+            excelStyles={excelStyles}
+            excelProcessCell={excelProcessCell}
+            excelSheetName="Confronto Offerte"
+            getRowId={(params) => params.data.id}
+            className={getGridThemeClass(isDarkMode)}
+            aggregations={aggregations}
+            showAggregationFooter={true}
+          />
+
+          <div className="text-xs text-muted-foreground flex flex-wrap gap-3 items-center">
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2.5 w-2.5 rounded-full bg-[rgba(34,197,94,0.5)] border border-green-600/60"></span>
+              Offerta sotto progetto (meglio)
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2.5 w-2.5 rounded-full bg-[rgba(239,68,68,0.35)] border border-red-600/60"></span>
+              Offerta sopra progetto (peggio)
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2.5 w-2.5 rounded-full border border-green-500"></span>
+              Prezzo migliore nella voce
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2.5 w-2.5 rounded-full border border-red-500"></span>
+              Prezzo peggiore nella voce
+            </span>
+            <span className="inline-flex items-center gap-1 font-semibold text-destructive">
+              <span aria-hidden>▲▼</span>
+              Δ Quantità diversa dal progetto
+            </span>
+          </div>
+        </div>
 
       {/* WBS Panel as Sheet Overlay */}
       <Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>

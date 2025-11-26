@@ -812,3 +812,20 @@ class ImportConfigSchema(ImportConfigCreateSchema):
     commessa_id: int | None
     created_at: datetime
     updated_at: datetime
+
+
+class ImportBatchSingleFileFailureSchema(BaseModel):
+    impresa: str
+    error: str
+    error_type: Optional[str] = None
+    details: Optional[str] = None
+    config: Optional[dict[str, Any]] = None
+
+
+class ImportBatchSingleFileResultSchema(BaseModel):
+    success: list[str]
+    failed: list[ImportBatchSingleFileFailureSchema]
+    total: int
+    success_count: int
+    failed_count: int
+    computi: dict[str, ComputoSchema]

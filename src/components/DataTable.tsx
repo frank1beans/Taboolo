@@ -67,6 +67,9 @@ export interface DataTableProps<T = Record<string, unknown>> {
   // Export
   exportFileName?: string;
   exportColumns?: ExcelExportColumn[];
+  excelStyles?: any[];
+  excelSheetName?: string;
+  excelProcessCell?: (params: any) => any;
 
   // Styling
   className?: string;
@@ -141,6 +144,9 @@ export function DataTable<T = Record<string, unknown>>({
   onCellValueChanged,
   exportFileName = "export",
   exportColumns,
+  excelStyles,
+  excelSheetName = "Data",
+  excelProcessCell,
   className,
   suppressAutoSize = false,
   isLoading = false,
@@ -257,16 +263,19 @@ export function DataTable<T = Record<string, unknown>>({
   const handleExport = useCallback(() => {
     if (!gridApi) return;
 
-    if (exportColumns) {
-      exportToExcel(data, exportColumns, exportFileName);
-    } else {
-      // Fallback to AG Grid export
+    const shouldUseGridExport = Boolean(excelStyles || excelProcessCell || !exportColumns);
+
+    if (shouldUseGridExport) {
       gridApi.exportDataAsExcel({
         fileName: exportFileName,
-        sheetName: "Data",
+        sheetName: excelSheetName,
+        processCellCallback: excelProcessCell,
+        excelStyles,
       });
+    } else {
+      exportToExcel(data, exportColumns!, exportFileName);
     }
-  }, [gridApi, data, exportColumns, exportFileName]);
+  }, [gridApi, data, exportColumns, exportFileName, excelProcessCell, excelSheetName, excelStyles]);
 
   // Handle row click
   const onRowClickedInternal = useCallback(

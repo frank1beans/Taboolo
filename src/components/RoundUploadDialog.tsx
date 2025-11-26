@@ -972,27 +972,50 @@ export function RoundUploadDialog({
 
         <div className="grid gap-4 md:grid-cols-2">
           {returnFormat === "mc" ? (
-            <div className="space-y-2">
-              <Label>Colonna progressivo *</Label>
-              <Select
-                value={progressiveColumnKey || EMPTY_SELECT_VALUE}
-                onValueChange={(value) =>
-                  setProgressiveColumnKey(value === EMPTY_SELECT_VALUE ? "" : value)
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Progressivo" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={EMPTY_SELECT_VALUE}>Nessuna</SelectItem>
-                  {returnColumns.map((column) => (
-                    <SelectItem key={column.key} value={column.key}>
-                      {column.label} ({column.key})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <>
+              <div className="space-y-2">
+                <Label>Colonna progressivo *</Label>
+                <Select
+                  value={progressiveColumnKey || EMPTY_SELECT_VALUE}
+                  onValueChange={(value) =>
+                    setProgressiveColumnKey(value === EMPTY_SELECT_VALUE ? "" : value)
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Progressivo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={EMPTY_SELECT_VALUE}>Nessuna</SelectItem>
+                    {returnColumns.map((column) => (
+                      <SelectItem key={column.key} value={column.key}>
+                        {column.label} ({column.key})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Colonna descrizione (per cercare "Totale")</Label>
+                <Select
+                  value={descriptionColumnKey || EMPTY_SELECT_VALUE}
+                  onValueChange={(value) =>
+                    setDescriptionColumnKey(value === EMPTY_SELECT_VALUE ? "" : value)
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Descrizione" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={EMPTY_SELECT_VALUE}>Nessuna</SelectItem>
+                    {returnColumns.map((column) => (
+                      <SelectItem key={column.key} value={column.key}>
+                        {column.label} ({column.key})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
           ) : (
             <>
               <div className="space-y-2">

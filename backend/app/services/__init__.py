@@ -1,7 +1,8 @@
 from .analysis import AnalysisService
 from .commessa_bundle import CommessaBundleService, commessa_bundle_service
 from .commesse import CommesseService
-from .importer import ImportService, import_service
+from .importer import ImportService, LcImportService, McImportService, import_service
+from .importers import BaseImportService
 from .insights import InsightsService
 from .six_import_service import (
     PreventivoSelectionError,
@@ -26,6 +27,9 @@ from .audit import record_audit_log
 __all__ = [
     "CommesseService",
     "ImportService",
+    "BaseImportService",
+    "LcImportService",
+    "McImportService",
     "import_service",
     "AnalysisService",
     "InsightsService",

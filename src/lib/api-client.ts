@@ -17,6 +17,7 @@ import {
   ApiManualPriceUpdateResponse,
   ApiImportConfig,
   ApiImportConfigCreate,
+  ApiBatchSingleFileResult,
   ApiPriceCatalogSummary,
   ApiPriceListItem,
   ApiPriceListItemSearchResult,
@@ -458,6 +459,47 @@ export const api = {
       method: "POST",
       body: formData,
     });
+  },
+
+  async uploadRitorniBatchSingleFile(
+    commessaId: number | string,
+    params: {
+      file: File;
+      impreseConfig: {
+        nome_impresa: string;
+        colonna_prezzo: string;
+        colonna_quantita?: string | null;
+        round_number?: number | null;
+        round_mode?: "auto" | "new" | "replace";
+      }[];
+      sheetName?: string | null;
+      codeColumns?: string[];
+      descriptionColumns?: string[];
+      progressiveColumn?: string | null;
+    },
+  ): Promise<ApiBatchSingleFileResult> {
+    const formData = new FormData();
+    formData.append("file", params.file);
+    formData.append("imprese_config", JSON.stringify(params.impreseConfig));
+    if (params.sheetName) {
+      formData.append("sheet_name", params.sheetName);
+    }
+    if (params.codeColumns?.length) {
+      formData.append("code_columns", JSON.stringify(params.codeColumns));
+    }
+    if (params.descriptionColumns?.length) {
+      formData.append("description_columns", JSON.stringify(params.descriptionColumns));
+    }
+    if (params.progressiveColumn) {
+      formData.append("progressive_column", params.progressiveColumn);
+    }
+    return apiFetch<ApiBatchSingleFileResult>(
+      `/commesse/${commessaId}/ritorni/batch-single-file`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
   },
 
   async deleteComputo(

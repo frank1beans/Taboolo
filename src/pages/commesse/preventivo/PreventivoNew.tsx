@@ -40,6 +40,7 @@ export default function PreventivoNew() {
 
   const computo = commessa?.computi?.find((c) => c.id === Number(computoId));
   const isLoading = !commessa || wbsLoading;
+  const hasVoci = (wbsData?.voci?.length ?? 0) > 0;
 
   // Convert WBS tree to frontend nodes
   const wbsTree = useMemo<FrontendWbsNode[]>(() => {
@@ -71,26 +72,29 @@ export default function PreventivoNew() {
     return wbsData.tree.map((node, idx) => convertNode(node, idx));
   }, [wbsData]);
 
-  // Filter voci based on selected WBS node
-  const filteredVoci = useMemo(() => {
-    if (!wbsData?.voci) return [];
-    if (!selectedNodeId) return wbsData.voci;
+  const selectedWbsNode = useMemo<FrontendWbsNode | null>(() => {
+    if (!selectedNodeId) return null;
 
-    const findNode = (nodes: FrontendWbsNode[], id: string): FrontendWbsNode | null => {
+    const findNode = (nodes: FrontendWbsNode[]): FrontendWbsNode | null => {
       for (const node of nodes) {
-        if (node.id === id) return node;
+        if (node.id === selectedNodeId) return node;
         if (node.children) {
-          const found = findNode(node.children, id);
+          const found = findNode(node.children);
           if (found) return found;
         }
       }
       return null;
     };
 
-    const selectedNode = findNode(wbsTree, selectedNodeId);
-    if (!selectedNode) return wbsData.voci;
+    return findNode(wbsTree);
+  }, [selectedNodeId, wbsTree]);
 
-    const selectedPath = selectedNode.path ?? [];
+  // Filter voci based on selected WBS node
+  const filteredVoci = useMemo(() => {
+    if (!wbsData?.voci) return [];
+    if (!selectedWbsNode) return wbsData.voci;
+
+    const selectedPath = selectedWbsNode.path ?? [];
     if (!selectedPath.length) return wbsData.voci;
 
     const matchesSegment = (segment: ApiWbsPathEntry, voceSegment?: ApiWbsPathEntry) => {
@@ -114,7 +118,7 @@ export default function PreventivoNew() {
     };
 
     return wbsData.voci.filter((voce) => matchesPath(voce));
-  }, [wbsData, selectedNodeId, wbsTree]);
+  }, [wbsData, selectedWbsNode]);
 
   // Column definitions
   const columnDefs = useMemo<ColDef<ApiAggregatedVoce>[]>(() => {
@@ -243,11 +247,13 @@ export default function PreventivoNew() {
   ];
 
   // Build active filters for TablePage
-  const activeFiltersArray: ActiveFilter[] = selectedNodeId
+  const activeFiltersArray: ActiveFilter[] = selectedWbsNode
     ? [{
         id: "wbs",
         label: "WBS",
-        value: selectedNodeId.split("|").pop()?.split(":")[1] || selectedNodeId,
+        value: selectedWbsNode.code
+          ? `${selectedWbsNode.code}${selectedWbsNode.description ? ` · ${selectedWbsNode.description}` : ""}`
+          : selectedWbsNode.description || selectedNodeId || "",
         onRemove: () => setSelectedNodeId(null),
       }]
     : [];
@@ -284,6 +290,33 @@ export default function PreventivoNew() {
           <AlertDescription>Preventivo non trovato</AlertDescription>
         </Alert>
       </div>
+    );
+  }
+
+  if (!computoId) {
+    return (
+      <div className="flex-1 bg-muted/30 p-8">
+        <Alert variant="destructive" className="rounded-2xl border border-border/60">
+          <AlertDescription>Computo non valido: parametro mancante</AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (!isLoading && !hasVoci) {
+    return (
+      <TablePage
+        title={computo?.nome || "Preventivo"}
+        description="Nessuna voce disponibile per questo computo"
+        stats={tableStats}
+        activeFilters={activeFiltersArray}
+        onClearAllFilters={() => setSelectedNodeId(null)}
+        className="h-full"
+      >
+        <div className="rounded-2xl border border-border/60 bg-card/50 p-8 text-sm text-muted-foreground">
+          Non sono presenti voci per il preventivo selezionato. Verifica il computo o scegli un altro WBS.
+        </div>
+      </TablePage>
     );
   }
 

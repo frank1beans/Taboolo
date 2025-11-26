@@ -52,7 +52,7 @@ const WBSNodeItem = ({
   const [isExpanded, setIsExpanded] = useState(level <= autoExpandLevel);
 
   const hasChildren = node.children && node.children.length > 0;
-  const nodeKey = node.code || node.id;
+  const nodeKey = node.id;
   const isSelected = selectedNodeId === nodeKey;
 
   // Determine if node matches search
@@ -221,8 +221,7 @@ export function WBSFilterPanel({
       key: string
     ): FrontendWbsNode | null => {
       for (const node of list) {
-        const nodeKey = node.code || node.id;
-        if (nodeKey === key) return node;
+        if (node.id === key) return node;
         if (node.children) {
           const found = findNode(node.children, key);
           if (found) return found;

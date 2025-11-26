@@ -279,6 +279,23 @@ export interface ApiImportConfig extends ApiImportConfigCreate {
   updated_at: string;
 }
 
+export interface ApiBatchSingleFileFailure {
+  impresa: string;
+  error: string;
+  error_type?: string | null;
+  details?: string | null;
+  config?: Record<string, any> | null;
+}
+
+export interface ApiBatchSingleFileResult {
+  success: string[];
+  failed: ApiBatchSingleFileFailure[];
+  total: number;
+  success_count: number;
+  failed_count: number;
+  computi: Record<string, ApiComputo>;
+}
+
 export interface ApiCommessaPreferencesCreate {
   selected_preventivo_id?: string | null;
   selected_price_list_id?: string | null;

@@ -42,6 +42,7 @@ from app.schemas import (
     CommessaWbsSchema,
     CommessaSchema,
     ComputoSchema,
+    ImportBatchSingleFileResultSchema,
     ConfrontoOfferteSchema,
     HeatmapCompetitivitaSchema,
     ManualPriceUpdateRequest,
@@ -1429,6 +1430,109 @@ async def upload_ritorno_gara(
         outcome="success",
     )
     return ComputoSchema.model_validate(computo)
+
+
+@router.post(
+    "/{commessa_id}/ritorni/batch-single-file",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ImportBatchSingleFileResultSchema,
+    dependencies=[write_guard],
+)
+async def upload_ritorni_batch_single_file(
+    commessa_id: int,
+    request: Request,
+    session: DBSession,
+    file: UploadFile = File(...),
+    imprese_config: str = Form(..., description="JSON array con colonne prezzo/quantità per impresa"),
+    sheet_name: str | None = Form(default=None),
+    code_columns: str | None = Form(default=None),
+    description_columns: str | None = Form(default=None),
+    progressive_column: str | None = Form(default=None),
+) -> ImportBatchSingleFileResultSchema:
+    """
+    Importa ritorni di gara per più imprese partendo da un unico file Excel.
+    """
+    commessa = CommesseService.get_commessa(session, commessa_id)
+    if not commessa:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Commessa non trovata"
+        )
+
+    _ensure_excel_file(file)
+
+    try:
+        config_payload = json.loads(imprese_config)
+        if not isinstance(config_payload, list):
+            raise ValueError("imprese_config deve essere una lista JSON")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Config imprese non valida: {exc}",
+        )
+
+    client_ip = request.client.host if request.client else "anonymous"
+    enforce_rate_limit(import_rate_limiter, client_ip)
+    saved_result = storage_service.save_upload(commessa_id, file)
+    saved_path = saved_result.path
+
+    parsed_code_columns = _parse_column_list(code_columns)
+    parsed_description_columns = _parse_column_list(description_columns)
+    normalized_progressive_column = (
+        progressive_column.strip().lstrip("$").upper()
+        if progressive_column and progressive_column.strip()
+        else None
+    )
+    sheet_name_value = sheet_name.strip() if sheet_name and sheet_name.strip() else None
+
+    try:
+        result = import_service.import_batch_single_file(
+            session=session,
+            commessa_id=commessa_id,
+            file=saved_path,
+            originale_nome=file.filename,
+            imprese_config=config_payload,
+            sheet_name=sheet_name_value,
+            sheet_code_columns=parsed_code_columns,
+            sheet_description_columns=parsed_description_columns,
+            sheet_progressive_column=normalized_progressive_column,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    record_audit_log(
+        session,
+        user_id=None,
+        action="IMPORT_BATCH_SINGLE_FILE",
+        endpoint=str(request.url),
+        ip_address=client_ip,
+        method="POST",
+        payload=saved_result.sha256,
+        outcome="success",
+    )
+
+    computi_serialized = {
+        impresa_label: ComputoSchema.model_validate(computo)
+        for impresa_label, computo in (result.get("computi") or {}).items()
+    }
+    failed_entries = [
+        {
+            "impresa": item.get("impresa") or "",
+            "error": item.get("error") or "Errore sconosciuto",
+            "error_type": item.get("error_type"),
+            "details": item.get("details"),
+            "config": item.get("config"),
+        }
+        for item in result.get("failed", [])
+    ]
+
+    return ImportBatchSingleFileResultSchema(
+        success=result.get("success", []),
+        failed=failed_entries,
+        total=result.get("total", len(config_payload)),
+        success_count=result.get("success_count", 0),
+        failed_count=result.get("failed_count", 0),
+        computi=computi_serialized,
+    )
 
 
 @router.post(

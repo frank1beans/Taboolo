@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -116,8 +117,15 @@ def _parse_computo_estimativo(titolo: str | None, rows: list[list]) -> ParsedCom
             rows_consumed,
         ) = _collect_measure_rows(rows, i + 1)
 
+        # Controlla se è una riga "Totale" (il valore prezzo è l'importo totale del gruppo)
+        is_totale_row = descrizione and "totale" in descrizione.lower()
+
         # FIX: Calcolo più robusto per evitare confusione importo/prezzo
-        if (
+        if is_totale_row and prezzo_unitario is not None:
+            # Per righe "Totale": usa il prezzo come importo totale
+            importo = round(prezzo_unitario, 2)
+            prezzo_unitario = None
+        elif (
             importo is None
             and quantita not in (None, 0)
             and prezzo_unitario is not None
@@ -172,7 +180,7 @@ def _parse_computo_estimativo(titolo: str | None, rows: list[list]) -> ParsedCom
     totale_importo = round(sum(voce.importo or 0 for voce in voci), 2) if voci else None
     quantita_values = [voce.quantita for voce in voci if voce.quantita is not None]
     totale_quantita = (
-        round(sum(quantita_values), 4) if quantita_values else None
+        round(sum(quantita_values), 2) if quantita_values else None
     )
 
     return ParsedComputo(
@@ -239,9 +247,9 @@ def _parse_lista_lavorazioni(titolo: str | None, rows: list[list]) -> ParsedComp
         unita = _sanitize_text(
             pick(row, "u m", "um", "unita di misura")
         )
-        quantita = _to_float(pick(row, "quantita", "qta"))
-        prezzo = _to_float(pick(row, "prezzo", "prezzo unitario"))
-        importo = _to_float(pick(row, "importo", "totale", "totale importo"))
+        quantita = _to_float(pick(row, "quantita", "qta"), decimals=2)
+        prezzo = _to_float(pick(row, "prezzo", "prezzo unitario"), decimals=4)
+        importo = _to_float(pick(row, "importo", "totale", "totale importo"), decimals=2)
         note = _sanitize_text(pick(row, "note", "osservazioni"))
 
         descrizione = descrizione_estesa or sub_desc
@@ -263,8 +271,15 @@ def _parse_lista_lavorazioni(titolo: str | None, rows: list[list]) -> ParsedComp
 
         voce_codice = sub_code or categoria_code
 
+        # Controlla se è una riga "Totale" (il valore prezzo è l'importo totale del gruppo)
+        is_totale_row = descrizione and "totale" in descrizione.lower()
+
         # FIX: Stesso sanity check per lista lavorazioni
-        if importo is None and quantita not in (None, 0) and prezzo is not None:
+        if is_totale_row and prezzo is not None:
+            # Per righe "Totale": usa il prezzo come importo totale
+            importo = round(prezzo, 2)
+            prezzo = None
+        elif importo is None and quantita not in (None, 0) and prezzo is not None:
             importo = round(prezzo * quantita, 2)
         elif prezzo is None and quantita not in (None, 0) and importo is not None:
             calculated_price = importo / quantita
@@ -299,7 +314,7 @@ def _parse_lista_lavorazioni(titolo: str | None, rows: list[list]) -> ParsedComp
     totale_importo = round(sum(voce.importo or 0 for voce in voci), 2) if voci else None
     quantita_values = [voce.quantita for voce in voci if voce.quantita is not None]
     totale_quantita = (
-        round(sum(quantita_values), 4) if quantita_values else None
+        round(sum(quantita_values), 2) if quantita_values else None
     )
 
     return ParsedComputo(
@@ -611,9 +626,9 @@ def _collect_measure_rows(
     start_index: int,
 ) -> tuple[str | None, float | None, float | None, float | None, str | None, int]:
     unita: str | None = None
-    quantita: float | None = None
+    quantita_total: float | None = None
     prezzo: float | None = None
-    importo: float | None = None
+    importo_total: float | None = None
     note: str | None = None
     rows_consumed = 0
 
@@ -643,46 +658,51 @@ def _collect_measure_rows(
             rows_consumed += 1
             break
 
-        if value_descr == "totale":
-            unita_candidate = _sanitize_text(current[4])
-            if unita_candidate:
-                unita = unita_candidate
-            quantita_candidate = _to_float(current[9])
-            if quantita_candidate is not None:
-                quantita = quantita_candidate
-            prezzo_candidate = _to_float(current[10])
-            if prezzo_candidate is not None:
-                prezzo = prezzo_candidate
-            importo_candidate = _to_float(current[11])
-            if importo_candidate is not None:
-                importo = importo_candidate
-            note_candidate = (
-                _sanitize_text(current[12] if len(current) > 12 else None)
-            )
-            if note_candidate:
-                note = note_candidate
-            rows_consumed += 1
-            break
+        # Rileva righe di detrazione: se la descrizione contiene "detraz" consideriamo la misura negativa.
+        detrazione = _row_has_detrazione(current)
+        sign = -1 if detrazione else 1
+        is_total_row = value_descr.startswith("totale")
 
         unita_candidate = _sanitize_text(current[4])
         if unita_candidate:
             unita = unita_candidate
-        quantita_candidate = _to_float(current[9])
+
+        quantita_candidate = _to_float(current[9], decimals=2)
         if quantita_candidate is not None:
-            quantita = quantita_candidate
-        prezzo_candidate = _to_float(current[10])
+            quantita_total = (quantita_total or 0.0) + sign * quantita_candidate
+
+        prezzo_candidate = _to_float(current[10], decimals=4)
         if prezzo_candidate is not None:
             prezzo = prezzo_candidate
-        importo_candidate = _to_float(current[11])
+
+        importo_candidate = _to_float(current[11], decimals=2)
         if importo_candidate is not None:
-            importo = importo_candidate
+            importo_total = (importo_total or 0.0) + sign * importo_candidate
+
         if len(current) > 12:
             note_candidate = _sanitize_text(current[12])
             if note_candidate:
                 note = note_candidate
+
         rows_consumed += 1
 
-    return unita, quantita, prezzo, importo, note, rows_consumed
+        if is_total_row:
+            break
+
+    quantita_value: float | None = None
+    importo_value: float | None = None
+    if quantita_total is not None:
+        quantita_value = round(quantita_total, 2)
+    if importo_total is not None:
+        importo_value = round(importo_total, 2)
+
+    # Se manca l'importo ma abbiamo prezzo e quantita, calcola l'importo; viceversa calcola il prezzo.
+    if importo_value is None and prezzo is not None and quantita_value not in (None, 0):
+        importo_value = round(prezzo * quantita_value, 2)
+    elif prezzo is None and quantita_value not in (None, 0) and importo_value is not None:
+        prezzo = round(importo_value / quantita_value, 4)
+
+    return unita, quantita_value, prezzo, importo_value, note, rows_consumed
 
 
 def _sanitize_text(value) -> str | None:
@@ -692,19 +712,37 @@ def _sanitize_text(value) -> str | None:
     return text or None
 
 
-def _to_float(value) -> float | None:
+def _row_has_detrazione(row: Sequence) -> bool:
+    """Riconosce righe di misura marcate come detrazioni."""
+    for cell in row:
+        if isinstance(cell, str) and "detraz" in cell.lower():
+            return True
+    return False
+
+
+def _to_float(value, decimals: int = 2) -> float | None:
+    """Converte un valore in float, arrotondando al numero di decimali specificato."""
     if value is None or value == "":
         return None
+
+    quantize_str = "0." + "0" * decimals if decimals > 0 else "1"
+
     if isinstance(value, (int, float)):
         try:
-            return float(value)
-        except ValueError:
+            result = Decimal(str(value)).quantize(
+                Decimal(quantize_str), rounding=ROUND_HALF_UP
+            )
+            return float(result)
+        except Exception:
             return None
     text = str(value).strip().replace("\u202f", "")
     text = text.replace(".", "").replace(",", ".")
     try:
-        return float(text)
-    except ValueError:
+        result = Decimal(text).quantize(
+            Decimal(quantize_str), rounding=ROUND_HALF_UP
+        )
+        return float(result)
+    except Exception:
         return None
 
 
