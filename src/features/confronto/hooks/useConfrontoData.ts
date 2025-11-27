@@ -57,6 +57,7 @@ function mapConfrontoResponse(data: ApiConfrontoOfferte): ConfrontoData {
             "";
 
         return {
+            progressivo: voce.progressivo ?? null,
             codice,
             descrizione,
             descrizione_estesa: descrizioneEstesa || undefined,
@@ -117,6 +118,7 @@ export function useConfrontoData(commessaId: string, selectedRound: number | "al
 
             const row: ConfrontoRow = {
                 id: `${voce.codice}-${index}`,
+                progressivo: voce.progressivo ?? null,
                 codice: voce.codice,
                 descrizione: voce.descrizione,
                 descrizione_estesa: voce.descrizione_estesa,

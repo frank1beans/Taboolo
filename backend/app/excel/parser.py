@@ -44,6 +44,7 @@ class ParsedComputo:
     totale_importo: float | None
     totale_quantita: float | None
     voci: list[ParsedVoce]
+    stats: dict[str, Any] | None = None
 
 
 def parse_computo_excel(

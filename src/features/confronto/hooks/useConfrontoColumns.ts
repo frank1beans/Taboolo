@@ -24,6 +24,15 @@ export function useConfrontoColumns({
   return useMemo(() => {
     const baseColumns: ColDef<ConfrontoRow>[] = [
       {
+        field: "progressivo",
+        headerName: "#",
+        width: 80,
+        pinned: "left",
+        filter: "agNumberColumnFilter",
+        type: "numericColumn",
+        cellStyle: { fontWeight: "600", backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc" },
+      },
+      {
         field: "codice",
         headerName: "Codice",
         width: 120,

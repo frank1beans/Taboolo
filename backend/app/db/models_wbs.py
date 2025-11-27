@@ -166,8 +166,9 @@ class Voce(SQLModel, table=True):
             "commessa_id",
             "wbs6_id",
             "codice",
+            "progressivo",
             "ordine",
-            name="uq_voce_commessa_wbs6_codice_ordine",
+            name="uq_voce_commessa_wbs6_codice_progressivo_ordine",
         ),
         UniqueConstraint(
             "legacy_vocecomputo_id",
@@ -183,6 +184,10 @@ class Voce(SQLModel, table=True):
         default=None,
         foreign_key="vocecomputo.id",
         description="Riferimento alla voce legacy per compatibilità",
+    )
+    progressivo: Optional[int] = Field(
+        default=None,
+        description="Numero progressivo della voce nel computo originale",
     )
     codice: Optional[str] = None
     descrizione: Optional[str] = None

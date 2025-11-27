@@ -18,6 +18,7 @@ export interface OffertaRecord {
 
 export interface ConfrontoRow {
     id: string;
+    progressivo?: number | null;
     codice: string;
     descrizione: string;
     descrizione_estesa?: string | null;
@@ -38,6 +39,7 @@ export interface ConfrontoRow {
 }
 
 export interface VoceConfronto {
+    progressivo?: number | null;
     codice: string;
     descrizione: string;
     descrizione_estesa?: string | null;

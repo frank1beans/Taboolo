@@ -18,6 +18,7 @@ class ComparisonService:
 
         voci_schema = [
             ConfrontoVoceSchema(
+                progressivo=item.get("progressivo"),
                 codice=item["codice"],
                 descrizione=item["descrizione"],
                 descrizione_estesa=item.get("descrizione_originale") or item.get("descrizione"),

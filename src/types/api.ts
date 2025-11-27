@@ -338,6 +338,7 @@ export interface ApiConfrontoVoceOfferta {
 }
 
 export interface ApiConfrontoVoce {
+  progressivo?: number | null;
   codice?: string | null;
   descrizione?: string | null;
   descrizione_estesa?: string | null;

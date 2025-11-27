@@ -306,6 +306,7 @@ class SixImportReportSchema(BaseModel):
     importo_totale: float
     price_items: Optional[int] = None
     preventivo_id: Optional[str] = None
+    voci_stats: Optional[dict[str, int]] = None
     listino_only: bool = False
 
 
@@ -591,6 +592,7 @@ class ConfrontoVoceOffertaSchema(BaseModel):
 
 
 class ConfrontoVoceSchema(BaseModel):
+    progressivo: Optional[int] = None
     codice: Optional[str] = None
     descrizione: Optional[str] = None
     descrizione_estesa: Optional[str] = None

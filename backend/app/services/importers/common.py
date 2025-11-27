@@ -209,20 +209,33 @@ class _WbsNormalizeContext:
         resolved_price_list_id = price_list_item_id or self.resolve_price_list_item_id(parsed)
 
         target_wbs7_id = wbs7.id if wbs7 else None
-        key = (wbs6.id, target_wbs7_id, parsed.codice, parsed.ordine)
+        # Include progressivo nella chiave per evitare aggregazioni non volute
+        # quando lo stesso prodotto appare in WBS6/WBS7 uguali con progressivi diversi
+        key = (wbs6.id, target_wbs7_id, parsed.codice, parsed.progressivo, parsed.ordine)
         voce = self.voce_cache.get(key)
         if not voce and legacy:
             voce = self.get_voce_from_legacy(legacy.id)
         if not voce:
-            voce = self.session.exec(
-                select(VoceNorm).where(
+            # Cerca prima per legacy_id se disponibile per preservare riferimenti esistenti
+            if legacy and legacy.id:
+                voce = self.session.exec(
+                    select(VoceNorm).where(
+                        VoceNorm.legacy_vocecomputo_id == legacy.id
+                    )
+                ).first()
+            # Altrimenti cerca per chiave naturale includendo progressivo
+            if not voce:
+                stmt = select(VoceNorm).where(
                     VoceNorm.commessa_id == self.commessa_id,
                     VoceNorm.wbs6_id == wbs6.id,
                     VoceNorm.wbs7_id == target_wbs7_id,
                     VoceNorm.codice == parsed.codice,
                     VoceNorm.ordine == parsed.ordine,
                 )
-            ).first()
+                # Aggiungi progressivo solo se presente (per compatibilità con import senza progressivo)
+                if parsed.progressivo is not None:
+                    stmt = stmt.where(VoceNorm.progressivo == parsed.progressivo)
+                voce = self.session.exec(stmt).first()
         if voce:
             updated = False
             if voce.wbs6_id != wbs6.id:
@@ -259,6 +272,7 @@ class _WbsNormalizeContext:
                 commessa_id=self.commessa_id,
                 wbs6_id=wbs6.id,
                 wbs7_id=target_wbs7_id,
+                progressivo=parsed.progressivo,
                 codice=parsed.codice,
                 descrizione=parsed.descrizione,
                 unita_misura=parsed.unita_misura,
@@ -390,12 +404,16 @@ class _WbsNormalizeContext:
             ).first()
         if not node:
             desc = description or f"WBS6 {code}"
-            label = f"{code} - {desc}" if desc else code
+            if desc and desc.lower().startswith(code.lower()):
+                label = desc
+            else:
+                label = f"{code} - {desc}" if desc else code
             node = Wbs6(
                 commessa_id=self.commessa_id,
                 wbs_spaziale_id=spatial_leaf.id if spatial_leaf else None,
                 code=code,
-                description=label,
+                description=desc,
+                label=label,
             )
             self.session.add(node)
             self.session.flush()

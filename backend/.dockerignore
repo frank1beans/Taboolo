@@ -1,7 +1,0 @@
-__pycache__/
-*.py[cod]
-*.log
-.venv/
-storage/
-database.sqlite
-migrations/versions/__pycache__/

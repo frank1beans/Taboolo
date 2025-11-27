@@ -197,6 +197,8 @@ class SixImportService:
             report["commessa_id"] = commessa_id
             report["price_items"] = len(price_catalog)
             report["preventivo_id"] = resolved_preventivo_id
+            if parsed_computo.stats:
+                report["voci_stats"] = parsed_computo.stats
             report["listino_only"] = False
             return report
 
@@ -419,6 +421,7 @@ class SixParser:
         self._progressivo_references: dict[tuple[str, int], list[tuple[tuple[str, int], Decimal]]] = {}
         self._resolved_progressivo_quantities: dict[tuple[str, int], Decimal | None] = {}
         self.last_used_product_ids: set[str] | None = None
+        self.last_parse_stats: dict[str, int] | None = None
         self._parse_price_lists()
         self._parse_units()
         self._parse_products()
@@ -528,22 +531,35 @@ class SixParser:
         self.primary_title = option.description or option.code or option.internal_id
         preventivo_price_list = self._map_price_list_id(option.price_list_id)
         price_preference = self._build_price_preference(preventivo_price_list)
+        stats: dict[str, int] = {
+            "preventivo_rilevazioni": 0,
+            "imported": 0,
+            "ignored_missing_prodotto_id": 0,
+            "ignored_product_not_found": 0,
+            "missing_price_zeroed": 0,
+            "fallback_wbs6_generated": 0,
+        }
 
         aggregates: dict[
-            tuple[str, int | None, tuple[tuple[int, str], ...], str | None, str | None],
+            tuple[str, int, int | None, tuple[tuple[int, str], ...], str | None, str | None],
             _AggregatedVoce,
         ] = {}
         ordered_keys: list[
-            tuple[str, int | None, tuple[tuple[int, str], ...], str | None, str | None]
+            tuple[str, int, int | None, tuple[tuple[int, str], ...], str | None, str | None]
         ] = []
         used_product_ids: set[str] = set()
 
-        for rilevazione in preventivo_node.findall(f"{self.ns}prvRilevazione"):
+        for rilevazione_idx, rilevazione in enumerate(
+            preventivo_node.findall(f"{self.ns}prvRilevazione"), start=1
+        ):
             prodotto_id = rilevazione.attrib.get("prodottoId")
+            stats["preventivo_rilevazioni"] += 1
             if not prodotto_id:
+                stats["ignored_missing_prodotto_id"] += 1
                 continue
             product = self.products.get(prodotto_id)
             if not product:
+                stats["ignored_product_not_found"] += 1
                 logger.warning("Prodotto %s non trovato nel prezzario", prodotto_id)
                 continue
             used_product_ids.add(product.prodotto_id)
@@ -580,22 +596,29 @@ class SixParser:
 
             prezzo = product.pick_price(lista_id, price_preference)
             if prezzo is None:
-                logger.warning("Voce %s ignorata: prezzo non disponibile", product.code)
-                continue
+                stats["missing_price_zeroed"] += 1
+                logger.info("Voce %s: prezzo non disponibile, imposto a 0", product.code)
+                prezzo = 0.0
 
             wbs_levels = self._collect_wbs_levels(rilevazione, product)
             if not any(level.level == 6 for level in wbs_levels):
-                logger.warning(
-                    "Voce %s ignorata: impossibile determinare WBS6",
+                fallback_wbs6 = self._build_fallback_wbs6(product, progressivo)
+                wbs_levels.append(fallback_wbs6)
+                wbs_levels.sort(key=lambda lvl: lvl.level)
+                stats["fallback_wbs6_generated"] += 1
+                logger.info(
+                    "Voce %s: WBS6 mancante, uso fallback %s",
                     product.code,
+                    fallback_wbs6.code,
                 )
-                continue
 
+            stats["imported"] += 1
             aggregate_key = self._build_aggregate_key(
                 product,
                 wbs_levels,
                 progressivo,
                 target_id,
+                rilevazione_idx,
             )
             entry = aggregates.get(aggregate_key)
             if entry is None:
@@ -727,11 +750,23 @@ class SixParser:
             round(sum(quantita_values), 4) if quantita_values else None
         )
         self.last_used_product_ids = used_product_ids or set()
+        self.last_parse_stats = stats
+        logger.info(
+            "Import SIX %s: rilevazioni=%s importate=%s ignorate(prodottoId mancante=%s, prodotto non trovato=%s), fallback(prezzo=0: %s, WBS6 generata=%s)",
+            target_id,
+            stats["preventivo_rilevazioni"],
+            stats["imported"],
+            stats["ignored_missing_prodotto_id"],
+            stats["ignored_product_not_found"],
+            stats["missing_price_zeroed"],
+            stats["fallback_wbs6_generated"],
+        )
         return ParsedComputo(
             titolo=self.primary_title,
             totale_importo=totale_importo,
             totale_quantita=totale_quantita,
             voci=voci,
+            stats=dict(stats),
         )
 
 
@@ -767,6 +802,27 @@ class SixParser:
             )
         return [levels[idx] for idx in sorted(levels.keys())]
 
+    def _build_fallback_wbs6(
+        self,
+        product: _ProductEntry,
+        progressivo: int | None,
+    ) -> ParsedWbsLevel:
+        base = (
+            product.wbs6_code
+            or product.code
+            or product.prodotto_id
+            or (f"PROG-{progressivo}" if progressivo is not None else None)
+            or "UNMAPPED"
+        )
+        code = re.sub(r"[^A-Za-z0-9]", "", base).upper() or "UNMAPPED"
+        description = (
+            product.wbs6_description
+            or product.description
+            or product.code
+            or code
+        )
+        return ParsedWbsLevel(level=6, code=code, description=description)
+
     def _collect_group_kind(self, kind: str) -> list[dict[str, Any]]:
         groups: list[dict[str, Any]] = []
         for meta in self.group_values.values():
@@ -789,7 +845,8 @@ class SixParser:
         wbs_levels: Sequence[ParsedWbsLevel],
         progressivo: int | None,
         preventivo_id: str,
-    ) -> tuple[str, int | None, tuple[tuple[int, str], ...], str | None, str | None]:
+        rilevazione_idx: int,
+    ) -> tuple[str, int, int | None, tuple[tuple[int, str], ...], str | None, str | None]:
         spatial_tokens: list[tuple[int, str]] = []
         wbs6_token: str | None = None
         wbs7_token: str | None = None
@@ -807,8 +864,15 @@ class SixParser:
             wbs6_token = self._pick_identifier(product.wbs6_code, product.wbs6_description)
         if wbs7_token is None:
             wbs7_token = self._pick_identifier(product.wbs7_code, product.wbs7_description)
-        # Includiamo preventivo e progressivo nell'aggregate key
-        return (preventivo_id, progressivo, tuple(spatial_tokens), wbs6_token, wbs7_token)
+        # Includiamo preventivo, indice riga e progressivo nell'aggregate key per non perdere progressivi duplicati o mancanti
+        return (
+            preventivo_id,
+            rilevazione_idx,
+            progressivo,
+            tuple(spatial_tokens),
+            wbs6_token,
+            wbs7_token,
+        )
 
     def _build_price_list_stats(self) -> list[dict[str, Any]]:
         stats: dict[str, dict[str, Any]] = {}
@@ -1469,7 +1533,7 @@ class SixParser:
                         continue
                     # Allinea il totale preview con il calcolo principale: quantità dirette + riferimenti
                     quantita_dec: Decimal = self._compute_quantity(rilevazione) or Decimal("0")
-                    for ref_prog_key, factor in self._collect_reference_entries(rilevazione, preventivo_id):
+                    for ref_prog_key, factor in self._collect_reference_entries(rilevazione, internal_id):
                         ref_val = self._resolved_progressivo_quantities.get(ref_prog_key)
                         if ref_val is None:
                             ref_val = self._raw_progressivo_quantities.get(ref_prog_key)
@@ -1539,7 +1603,6 @@ class SixParser:
     def _precompute_raw_quantities(self) -> None:
         self._raw_progressivo_quantities.clear()
         self._progressivo_references.clear()
-        progressivo_owner: dict[int, str] = {}
 
         for preventivo in self.root.findall(f".//{self.ns}preventivo"):
             preventivo_id = preventivo.attrib.get("preventivoId") or "unknown"
@@ -1549,16 +1612,6 @@ class SixParser:
                 if progressivo is None:
                     continue
 
-                existing_owner = progressivo_owner.get(progressivo)
-                if existing_owner and existing_owner != preventivo_id:
-                    logger.warning(
-                        "Progressivo %s presente in più preventivi (%s, %s): uso il primo.",
-                        progressivo,
-                        existing_owner,
-                        preventivo_id,
-                    )
-                    continue
-                progressivo_owner.setdefault(progressivo, preventivo_id)
                 progressivo_key = (preventivo_id, progressivo)
 
                 quantity = self._compute_quantity(rilevazione)
