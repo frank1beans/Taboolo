@@ -1,9 +1,17 @@
-from .analysis import AnalysisService
+from .analysis import (
+    AnalysisService,
+    AnalysisCacheService,
+    ComparisonService,
+    CoreAnalysisService,
+    DashboardService,
+    TrendsService,
+    WbsAnalysisService,
+)
 from .commessa_bundle import CommessaBundleService, commessa_bundle_service
 from .commesse import CommesseService
 from .importer import ImportService, LcImportService, McImportService, import_service
 from .importers import BaseImportService
-from .insights import InsightsService
+# from .insights import InsightsService  # Deprecated - moved to analysis/
 from .six_import_service import (
     PreventivoSelectionError,
     SixImportService,
@@ -32,7 +40,13 @@ __all__ = [
     "McImportService",
     "import_service",
     "AnalysisService",
-    "InsightsService",
+    "AnalysisCacheService",
+    "ComparisonService",
+    "CoreAnalysisService",
+    "DashboardService",
+    "TrendsService",
+    "WbsAnalysisService",
+    # "InsightsService",  # Deprecated
     "SixImportService",
     "six_import_service",
     "PreventivoSelectionError",

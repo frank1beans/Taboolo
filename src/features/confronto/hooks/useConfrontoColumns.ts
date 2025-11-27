@@ -6,12 +6,11 @@ import { useMemo } from "react";
 import { ColDef, ColGroupDef } from "ag-grid-community";
 import { formatCurrency } from "@/lib/grid-utils";
 import {
-  ConfrontoRow,
-  ImpresaView,
   getImpresaFieldPrefix,
   getImpresaHeaderLabel,
   getColorForIndex,
-} from "./confrontoUtils";
+} from "../utils";
+import { ConfrontoRow, ImpresaView } from "../types";
 
 interface UseConfrontoColumnsOptions {
   filteredImprese: ImpresaView[];

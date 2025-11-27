@@ -43,7 +43,7 @@ import {
   ApiImportConfig,
   ApiImportConfigCreate,
 } from "@/types/api";
-import { CommessaPageHeader } from "@/components/CommessaPageHeader";
+import { CommessaPageHeader } from "@/features/commessa";
 import { useCommessaContext } from "@/hooks/useCommessaContext";
 
 type ToastFn = ReturnType<typeof useToast>["toast"];

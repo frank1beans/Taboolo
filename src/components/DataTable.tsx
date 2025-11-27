@@ -67,9 +67,8 @@ export interface DataTableProps<T = Record<string, unknown>> {
   // Export
   exportFileName?: string;
   exportColumns?: ExcelExportColumn[];
-  excelStyles?: any[];
-  excelSheetName?: string;
-  excelProcessCell?: (params: any) => any;
+  customExport?: () => void;
+  exportLabel?: string;
 
   // Styling
   className?: string;
@@ -144,9 +143,8 @@ export function DataTable<T = Record<string, unknown>>({
   onCellValueChanged,
   exportFileName = "export",
   exportColumns,
-  excelStyles,
-  excelSheetName = "Data",
-  excelProcessCell,
+  customExport,
+  exportLabel = "Esporta Excel",
   className,
   suppressAutoSize = false,
   isLoading = false,
@@ -261,21 +259,15 @@ export function DataTable<T = Record<string, unknown>>({
 
   // Export to Excel
   const handleExport = useCallback(() => {
-    if (!gridApi) return;
-
-    const shouldUseGridExport = Boolean(excelStyles || excelProcessCell || !exportColumns);
-
-    if (shouldUseGridExport) {
-      gridApi.exportDataAsExcel({
-        fileName: exportFileName,
-        sheetName: excelSheetName,
-        processCellCallback: excelProcessCell,
-        excelStyles,
-      });
-    } else {
-      exportToExcel(data, exportColumns!, exportFileName);
+    if (customExport) {
+      customExport();
+      return;
     }
-  }, [gridApi, data, exportColumns, exportFileName, excelProcessCell, excelSheetName, excelStyles]);
+
+    if (exportColumns) {
+      exportToExcel(data, exportColumns, exportFileName);
+    }
+  }, [customExport, data, exportColumns, exportFileName]);
 
   // Handle row click
   const onRowClickedInternal = useCallback(
@@ -355,6 +347,7 @@ export function DataTable<T = Record<string, unknown>>({
           enableColumnToggle={enableColumnToggle}
           onExport={handleExport}
           enableExport={enableExport}
+          exportLabel={exportLabel}
           leftContent={toolbarLeft}
           rightContent={toolbarRight}
           totalRows={data.length}

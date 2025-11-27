@@ -1,7 +1,8 @@
 from pathlib import Path
 import sys
 
-from pydantic import Field, field_validator
+import secrets
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,9 +52,12 @@ class Settings(BaseSettings):
     cors_allow_credentials: bool = True
 
     # JWT / auth
-    jwt_secret_key: str = Field(
-        default="change-me",
-        description=("Chiave segreta per la firma dei JWT - sovrascrivere in produzione"),
+    jwt_secret_key: str | None = Field(
+        default=None,
+        description=(
+            "Chiave segreta per la firma dei JWT - deve essere impostata in produzione. "
+            "In debug, se assente, viene generata una chiave temporanea."
+        ),
     )
     jwt_algorithm: str = Field(default="HS256", description="Algoritmo JWT")
     access_token_expire_minutes: int = Field(
@@ -156,6 +160,21 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TABOO_", env_file=".env", extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def _ensure_jwt_key(self) -> "Settings":
+        # Usa la chiave se impostata
+        if self.jwt_secret_key and self.jwt_secret_key.strip():
+            return self
+
+        # Se non presente, genera una chiave random e avvisa in log.
+        generated = secrets.token_urlsafe(48)
+        object.__setattr__(self, "jwt_secret_key", generated)
+        print(
+            "[WARN] TABOO_JWT_SECRET_KEY non impostata. "
+            "È stata generata una chiave temporanea; definisci TABOO_JWT_SECRET_KEY in produzione."
+        )
+        return self
 
     @property
     def effective_database_url(self) -> str:

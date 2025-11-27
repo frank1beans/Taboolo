@@ -6,7 +6,7 @@ import { AlertTriangle, Loader2, Upload } from "lucide-react";
 
 import { RoundUploadDialog } from "@/components/RoundUploadDialog";
 import { UploadArea } from "@/components/UploadArea";
-import { CommessaPageHeader } from "@/components/CommessaPageHeader";
+import { CommessaPageHeader } from "@/features/commessa";
 import { useCommessaContext } from "@/hooks/useCommessaContext";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api-client";

@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BarChart3, Clock3, Download, Euro, Layers3 } from "lucide-react";
 import { useCommessaContext } from "@/hooks/useCommessaContext";
-import { CommessaPageHeader } from "@/components/CommessaPageHeader";
-import { CommessaSummaryStrip } from "@/components/commessa/CommessaSummaryStrip";
+import { CommessaPageHeader } from "@/features/commessa";
+import { CommessaSummaryStrip } from "@/features/commessa";
 import { formatCurrency, formatShortDate, formatDateTime, groupComputi } from "@/lib/formatters";
 
 export default function CommessaPreventivoPage() {

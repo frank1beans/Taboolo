@@ -13,7 +13,7 @@ import { buildVisibilitySections } from "@/features/wbs/utils";
 import { api } from "@/lib/api-client";
 import { ApiCommessaWbs, ApiWbsVisibilityEntry } from "@/types/api";
 import { useCommessaContext } from "@/hooks/useCommessaContext";
-import { CommessaPageHeader } from "@/components/CommessaPageHeader";
+import { CommessaPageHeader } from "@/features/commessa";
 
 export default function CommessaWbsSettings() {
   const { toast } = useToast();

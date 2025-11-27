@@ -1,7 +1,7 @@
 import { Outlet, Navigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
-import { CommessaTabs } from "@/components/CommessaTabs";
+import { CommessaTabs } from "@/features/commessa";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiCommessaDetail } from "@/types/api";
 

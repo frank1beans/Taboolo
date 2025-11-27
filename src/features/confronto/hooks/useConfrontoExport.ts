@@ -5,11 +5,10 @@
 import { useMemo } from "react";
 import { formatCurrency } from "@/lib/grid-utils";
 import {
-  ConfrontoRow,
-  ImpresaView,
   getImpresaFieldPrefix,
   getImpresaHeaderLabel,
-} from "./confrontoUtils";
+} from "../utils";
+import { ConfrontoRow, ImpresaView } from "../types";
 
 interface ExportColumn {
   header: string;

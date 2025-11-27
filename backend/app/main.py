@@ -7,18 +7,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
-from app.api import api_router
+from app.api.router import api_router
 from app.api.middleware import audit_and_security_middleware
 from app.core import settings
 from app.core.logging import configure_logging
 from app.db import init_db
 from app.db.session import engine
-from app.db.models import Settings as SettingsModel
-from app.services.property_extraction import (
+from app.domain.settings.models import Settings as SettingsModel
+from app.services.nlp.property_extraction import (
     init_model as init_property_model,
     init_property_prototypes,
 )
-from app.services.nlp import semantic_embedding_service
+from app.services.nlp.embedding_service import semantic_embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +93,10 @@ def create_app() -> FastAPI:
     """
     Factory dell'app FastAPI.
 
-    Nota architetturale: l'entrypoint espone i router definiti in app.api.routes,
-    utilizza SQLModel (app.db.models) con engine condiviso in app.db.session
+    Nota architetturale: l'entrypoint espone i router definiti in app.api.v1.endpoints,
+    utilizza SQLModel (app.domain.*/models) con engine condiviso in app.db.session
     e carica le configurazioni da app.core.settings. I servizi applicativi
-    sono organizzati nel package app.services.
+    sono organizzati nel package app.services (orchestration) e app.domain (business logic).
     """
     application = FastAPI(
         title=settings.app_name,

@@ -28,17 +28,15 @@ def _parse_custom_return_excel(
     quantity_column: str | None = None,
     progressive_column: str | None = None,
 ) -> ParsedComputo:
-    workbook = load_workbook(
-        filename=file_path,
-        data_only=True,
-        read_only=True,
-    )
+    workbook = load_workbook(filename=file_path, data_only=True, read_only=True)
     try:
         sheet = _select_sheet(workbook, sheet_name)
-        rows = list(sheet.iter_rows(values_only=True))
+        raw_rows = list(sheet.iter_rows(values_only=True))
     finally:
         workbook.close()
 
+    # Pre-normalizza la tabella: elimina colonne completamente vuote e riempie i None con "" dove serve
+    rows, dropped_columns, kept_column_indexes = _drop_empty_columns(raw_rows)
     header_idx = _locate_header_row(rows)
     if header_idx is None:
         raise ValueError("Il foglio Excel selezionato non contiene righe valide da importare")
@@ -82,6 +80,10 @@ def _parse_custom_return_excel(
         )
 
     column_warnings: list[str] = []
+    if dropped_columns:
+        column_warnings.append(
+            f"Ignorate automaticamente {dropped_columns} colonne completamente vuote."
+        )
     try:
         code_indexes = _columns_to_indexes(code_columns, "codice", header_row=header_row, required=False)
     except ValueError:
@@ -137,19 +139,11 @@ def _parse_custom_return_excel(
         raise ValueError(
             "Seleziona almeno una colonna da utilizzare come codice, descrizione o progressivo"
         )
-    workbook_formulas = load_workbook(
-        filename=file_path,
-        data_only=False,
-        read_only=True,
-    )
+    workbook_formulas = load_workbook(filename=file_path, data_only=False, read_only=True)
     try:
         formula_sheet = _select_sheet(workbook_formulas, sheet_name)
-        formula_rows = list(
-            formula_sheet.iter_rows(
-                min_row=header_idx + 2,
-                values_only=False,
-            )
-        )
+        raw_formula_rows = list(formula_sheet.iter_rows(min_row=header_idx + 2, values_only=False))
+        formula_rows = _apply_column_filter(raw_formula_rows, kept_column_indexes)
     finally:
         workbook_formulas.close()
 
@@ -159,6 +153,7 @@ def _parse_custom_return_excel(
     ordine = 0
     last_code: str | None = None
     last_desc: str | None = None
+    last_progressivo: int | None = None
     for row in data_rows:
         formula_row = next(formula_rows_iter, ())
         if not _row_has_values(row):
@@ -172,14 +167,83 @@ def _parse_custom_return_excel(
         is_totale_row = descrizione and "totale" in descrizione.lower()
         has_price = raw_price is not None
 
+        # Se la riga contiene solo header (codice/descrizione/progressivo) senza quantità né prezzo,
+        # memorizza il contesto e passa alla riga successiva.
+        if not has_price and quantita is None:
+            if codice or descrizione or progressivo_value is not None:
+                last_code = codice or last_code
+                last_desc = descrizione or last_desc
+                if progressivo_value is not None:
+                    last_progressivo = progressivo_value
+            continue
+
+        # Aggiorna il contesto corrente: le righe di descrizione/codice senza prezzo
+        # fungono da header per la successiva riga "Totale".
+        if (codice or descrizione) and not has_price and not quantita:
+            last_code = codice or last_code
+            last_desc = descrizione or last_desc
+            if progressivo_value is not None:
+                last_progressivo = progressivo_value
+
         if (codice or progressivo_value) and not is_totale_row and not has_price:
             last_code = codice or last_code
             last_desc = descrizione or last_desc
+            if progressivo_value is not None:
+                last_progressivo = progressivo_value
             continue
 
         if not is_totale_row and not codice and progressivo_value is None and not has_price:
             if descrizione:
                 last_desc = descrizione
+            continue
+
+        # Gestione riga "Totale": usa codice/descrizione dell'header precedente,
+        # ma prendi quantita/prezzo dalla riga totale.
+        if is_totale_row and (quantita is not None or raw_price is not None):
+            source_code = codice or last_code
+            source_desc = last_desc or codice or "Voce senza descrizione"
+            source_progressivo = progressivo_value or last_progressivo
+            if source_progressivo is None:
+                continue
+            prezzo_value = _sanitize_price_candidate(raw_price) if raw_price is not None else None
+            quantita_value = quantita if quantita not in (None,) else None
+            importo_value = None
+            if prezzo_value is not None and quantita_value is not None:
+                _, importo_value = _calculate_line_amount(quantita_value, round(prezzo_value, 4))
+                prezzo_value = round(prezzo_value, 4)
+            elif raw_price is not None:
+                importo_value = _ceil_amount(raw_price)
+
+            wbs_levels: list[ParsedWbsLevel] = []
+            normalized_code_value = _normalize_wbs7_code(source_code)
+            if _looks_like_wbs7_code(normalized_code_value):
+                wbs_levels.append(
+                    ParsedWbsLevel(
+                        level=7,
+                        code=normalized_code_value,
+                        description=source_desc,
+                    )
+                )
+            voci.append(
+                ParsedVoce(
+                    ordine=ordine,
+                    progressivo=source_progressivo,
+                    codice=source_code,
+                    descrizione=source_desc,
+                    wbs_levels=wbs_levels,
+                    unita_misura=None,
+                    quantita=quantita_value,
+                    prezzo_unitario=prezzo_value,
+                    importo=importo_value,
+                    note=None,
+                    metadata=None,
+                )
+            )
+            ordine += 1
+            last_code = None
+            last_desc = None
+            last_progressivo = None
+            # Non azzero last_code/last_desc per consentire utilizzo in mancanza di header successivo
             continue
 
         if not codice and last_code:
@@ -189,6 +253,8 @@ def _parse_custom_return_excel(
         if raw_price is None:
             raw_price = 0.0
         if not codice and not descrizione and progressivo_value is None:
+            continue
+        if raw_price is None and quantita is None:
             continue
         if not codice and progressivo_value is not None:
             codice = f"PROG-{progressivo_value:05d}"
@@ -223,6 +289,9 @@ def _parse_custom_return_excel(
             prezzo_value = round(prezzo, 4)
             _, importo_value = _calculate_line_amount(quantita_value, prezzo_value)
         voce_descrizione = descrizione or codice or "Voce senza descrizione"
+        effective_progressivo = progressivo_value or last_progressivo
+        if effective_progressivo is None:
+            continue
         wbs_levels: list[ParsedWbsLevel] = []
         normalized_code_value = _normalize_wbs7_code(codice)
         if _looks_like_wbs7_code(normalized_code_value):
@@ -236,7 +305,7 @@ def _parse_custom_return_excel(
         voci.append(
             ParsedVoce(
                 ordine=ordine,
-                progressivo=progressivo_value,
+                progressivo=effective_progressivo,
                 codice=codice,
                 descrizione=voce_descrizione,
                 wbs_levels=wbs_levels,
@@ -269,6 +338,36 @@ def _select_sheet(workbook, requested_name: str | None):
 
 def _rows_to_dataframe(rows: Sequence[Sequence[Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
+
+
+def _drop_empty_columns(rows: Sequence[Sequence[Any]]) -> tuple[list[list[Any]], int, list[int]]:
+    """
+    Rimuove colonne totalmente vuote usando pandas per evitare offset errati quando il file
+    contiene colonne segnaposto o intere colonne vuote.
+    Restituisce righe ripulite, numero colonne eliminate e gli indici originali mantenuti.
+    """
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return [], 0, []
+
+    # Keep columns that have at least one non-null/non-empty cell
+    non_empty_mask = ~df.isna().all(axis=0)
+    kept_columns = [int(col) for col, keep in zip(df.columns, non_empty_mask) if keep]
+    cleaned = df.loc[:, non_empty_mask]
+
+    cleaned_rows = cleaned.where(pd.notna(cleaned), None).values.tolist()
+    dropped_count = len(df.columns) - len(kept_columns)
+    return cleaned_rows, dropped_count, kept_columns
+
+
+def _apply_column_filter(rows: Sequence[Sequence[Any]], kept_indexes: Sequence[int]) -> list[list[Any]]:
+    if not kept_indexes:
+        return [list(r) for r in rows]
+    kept_set = set(kept_indexes)
+    filtered: list[list[Any]] = []
+    for row in rows:
+        filtered.append([cell for idx, cell in enumerate(row) if idx in kept_set])
+    return filtered
 
 
 def _ratio(values: Sequence[str], predicate) -> float:
@@ -389,10 +488,14 @@ def _detect_column_suggestions(rows: list, header_idx: int) -> dict[str, Any]:
 
 
 def _locate_header_row(rows: list) -> int | None:
-    for idx, row in enumerate(rows[:20]):
-        if _row_has_values(row):
-            return idx
-    return None
+    best_idx: int | None = None
+    best_count = 0
+    for idx, row in enumerate(rows[:30]):
+        count = sum(1 for cell in row if _cell_has_content(cell))
+        if count > best_count:
+            best_idx = idx
+            best_count = count
+    return best_idx
 
 
 def _columns_to_indexes(

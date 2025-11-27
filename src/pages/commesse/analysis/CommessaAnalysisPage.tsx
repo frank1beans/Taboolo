@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ConfrontoOfferte } from "@/components/ConfrontoOfferte";
+import { ConfrontoOfferte } from "@/features/confronto";
 import { useCommessaContext } from "@/hooks/useCommessaContext";
 
 export default function CommessaAnalysisPage() {

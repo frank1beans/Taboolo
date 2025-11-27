@@ -18,7 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { NuovaCommessaDialog, CommessaData } from "@/components/NuovaCommessaDialog";
+import { NuovaCommessaDialog, CommessaData } from "@/features/commessa";
 import { ExplorerBreadcrumb, FolderGrid } from "@/components/folder-explorer";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";

@@ -1,0 +1,1 @@
+export { ConfrontoOfferte } from "./ConfrontoOfferte";

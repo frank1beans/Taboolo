@@ -5,14 +5,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { CommessaPageHeader } from "@/components/CommessaPageHeader";
+import { CommessaPageHeader } from "@/features/commessa";
 import { useCommessaContext } from "@/hooks/useCommessaContext";
 import { useAnalisiData } from "@/hooks/useAnalisiData";
 import { useTrendEvoluzioneData } from "@/hooks/useTrendEvoluzioneData";
 import { useHeatmapData } from "@/hooks/useHeatmapData";
-import { TrendEvoluzioneRound } from "@/components/charts/TrendEvoluzioneRound";
-import { HeatmapCompetitivita } from "@/components/charts/HeatmapCompetitivita";
-import { OverlayBarChart, type OverlaySeries } from "@/components/charts/OverlayBarChart";
+import { TrendEvoluzioneRound } from "@/features/analisi/components/charts/TrendEvoluzioneRound";
+import { HeatmapCompetitivita } from "@/features/analisi/components/charts/HeatmapCompetitivita";
+import { OverlayBarChart, type OverlaySeries } from "@/features/analisi/components/charts/OverlayBarChart";
 
 type ChartCardProps = {
   title: string;

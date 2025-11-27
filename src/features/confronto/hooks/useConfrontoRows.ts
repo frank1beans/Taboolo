@@ -4,12 +4,14 @@
 
 import { useMemo } from "react";
 import {
+  getImpresaFieldPrefix,
+  resolveOfferta,
+} from "../utils";
+import {
   ConfrontoRow,
   ImpresaView,
   OffertaRecord,
-  getImpresaFieldPrefix,
-  resolveOfferta,
-} from "./confrontoUtils";
+} from "../types";
 
 interface ConfrontoVoce {
   codice: string;
@@ -95,9 +97,9 @@ export function useConfrontoRows({ voci, filteredImprese }: UseConfrontoRowsOpti
         const deviazione =
           prezziVisibili.length > 1
             ? Math.sqrt(
-                prezziVisibili.reduce((acc, curr) => acc + Math.pow(curr - media, 2), 0) /
-                  prezziVisibili.length
-              )
+              prezziVisibili.reduce((acc, curr) => acc + Math.pow(curr - media, 2), 0) /
+              prezziVisibili.length
+            )
             : 0;
 
         row.mediaPrezzi = media;

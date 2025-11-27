@@ -1,6 +1,6 @@
-import { TrendEvoluzioneRound } from "@/components/charts/TrendEvoluzioneRound";
-import { WaterfallComposizioneDelta } from "@/components/charts/WaterfallComposizioneDelta";
-import { HeatmapCompetitivita } from "@/components/charts/HeatmapCompetitivita";
+import { TrendEvoluzioneRound } from "@/features/analisi/components/charts/TrendEvoluzioneRound";
+import { WaterfallComposizioneDelta } from "@/features/analisi/components/charts/WaterfallComposizioneDelta";
+import { HeatmapCompetitivita } from "@/features/analisi/components/charts/HeatmapCompetitivita";
 
 export default function TestGrafici() {
   // Dati mock per Trend Evoluzione

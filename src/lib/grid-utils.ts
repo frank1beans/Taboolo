@@ -6,6 +6,8 @@ import type {
   CellStyle,
 } from "ag-grid-community";
 import { utils, writeFile } from "xlsx";
+import type * as ExcelJSTypes from "exceljs";
+import ExcelJS from "exceljs/dist/exceljs.min.js";
 
 // ============= FORMATTERS =============
 
@@ -538,4 +540,367 @@ export const truncateMiddle = (
   const end = text.slice(-endChars);
 
   return `${start}...${end}`;
+};
+
+// ============= EXCELJS EXPORT =============
+
+export interface ExcelJSColumnConfig {
+  header: string;
+  field: string;
+  width?: number;
+  valueFormatter?: (row: any) => any;
+  // Formula support: return a formula string like "=SUM(A2:A10)"
+  formula?: (row: any, rowIndex: number) => string | null;
+  // Styling
+  style?: Partial<ExcelJSTypes.Style>;
+  // Header styling (applied only to header cells)
+  headerStyle?: Partial<ExcelJSTypes.Style>;
+  // Cell-specific styling function (takes row data and returns style)
+  cellStyle?: (row: any, rowIndex: number) => Partial<ExcelJSTypes.Style> | null;
+  // Conditional formatting rules
+  conditionalFormatting?: ConditionalFormattingRule[];
+}
+
+export interface ConditionalFormattingRule {
+  type: "cellIs" | "expression" | "colorScale" | "dataBar";
+  priority?: number;
+  // For cellIs type
+  operator?: "lessThan" | "greaterThan" | "equal" | "between" | "containsText";
+  value?: any;
+  value2?: any; // For "between" operator
+  // For expression type
+  formula?: string;
+  // Styling to apply when condition is met
+  style?: Partial<ExcelJSTypes.Style>;
+  // For colorScale type
+  colorScale?: {
+    min?: { color: string };
+    mid?: { color: string };
+    max?: { color: string };
+  };
+  // For dataBar type
+  dataBar?: {
+    color: string;
+    showValue?: boolean;
+  };
+}
+
+export interface GlobalConditionalFormatting {
+  range: string;
+  rules: Array<{
+    type: "expression" | "cellIs" | "colorScale" | "dataBar";
+    formula?: string;
+    operator?: "lessThan" | "greaterThan" | "equal" | "between" | "containsText";
+    value?: any;
+    value2?: any;
+    style?: Partial<ExcelJSTypes.Style>;
+    colorScale?: {
+      min?: { color: { argb: string } };
+      mid?: { color: { argb: string } };
+      max?: { color: { argb: string } };
+    };
+  }>;
+}
+
+export interface ExcelJSExportOptions {
+  fileName: string;
+  sheetName?: string;
+  columns: ExcelJSColumnConfig[];
+  data: any[];
+  // Global styles
+  headerStyle?: Partial<ExcelJSTypes.Style>;
+  dataStyle?: Partial<ExcelJSTypes.Style>;
+  // Auto-filter
+  enableAutoFilter?: boolean;
+  // Freeze panes
+  freezeRows?: number;
+  freezeColumns?: number;
+  // Global conditional formatting
+  conditionalFormatting?: GlobalConditionalFormatting[];
+}
+
+/**
+ * Esporta dati in Excel usando ExcelJS con supporto per formule e formattazione condizionale
+ */
+export const exportToExcelJS = async (options: ExcelJSExportOptions): Promise<void> => {
+  const {
+    fileName,
+    sheetName = "Data",
+    columns,
+    data,
+    headerStyle,
+    dataStyle,
+    enableAutoFilter = true,
+    freezeRows = 1,
+    freezeColumns = 0,
+  } = options;
+
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet(sheetName);
+
+  // Define columns
+  worksheet.columns = columns.map((col) => ({
+    header: col.header,
+    key: col.field,
+    width: col.width ?? 15,
+  }));
+
+  // Style header row
+  const defaultHeaderStyle: Partial<ExcelJSTypes.Style> = {
+    font: { bold: true, size: 11 },
+    fill: {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFE9ECEF" },
+    },
+    alignment: { vertical: "middle", horizontal: "center" },
+    border: {
+      top: { style: "thin", color: { argb: "FFADB5BD" } },
+      bottom: { style: "thin", color: { argb: "FFADB5BD" } },
+      left: { style: "thin", color: { argb: "FFADB5BD" } },
+      right: { style: "thin", color: { argb: "FFADB5BD" } },
+    },
+  };
+
+  const headerRow = worksheet.getRow(1);
+  headerRow.height = 25;
+  headerRow.eachCell((cell, colNumber) => {
+    const columnConfig = columns[colNumber - 1];
+    // Apply column-specific header style if available, otherwise use default
+    cell.style = {
+      ...defaultHeaderStyle,
+      ...headerStyle,
+      ...columnConfig?.headerStyle
+    };
+  });
+
+  // Add data rows
+  data.forEach((row, rowIndex) => {
+    const excelRow: any = {};
+
+    columns.forEach((col) => {
+      // Check if there's a formula in column config
+      if (col.formula) {
+        const formulaValue = col.formula(row, rowIndex + 2); // +2 because Excel is 1-indexed and row 1 is header
+        if (formulaValue) {
+          excelRow[col.field] = { formula: formulaValue };
+          return;
+        }
+      }
+
+      // Check if the data value itself is a formula object
+      const fieldValue = row[col.field];
+      if (fieldValue && typeof fieldValue === 'object' && 'formula' in fieldValue) {
+        excelRow[col.field] = { formula: fieldValue.formula };
+        return;
+      }
+
+      // Otherwise use value formatter or raw value
+      if (col.valueFormatter) {
+        excelRow[col.field] = col.valueFormatter(row);
+      } else {
+        excelRow[col.field] = fieldValue ?? "";
+      }
+    });
+
+    const addedRow = worksheet.addRow(excelRow);
+
+    // Apply data styling
+  const defaultDataStyle: Partial<ExcelJSTypes.Style> = {
+      alignment: { vertical: "middle", horizontal: "left" },
+      border: {
+        top: { style: "thin", color: { argb: "FFE9ECEF" } },
+        bottom: { style: "thin", color: { argb: "FFE9ECEF" } },
+        left: { style: "thin", color: { argb: "FFE9ECEF" } },
+        right: { style: "thin", color: { argb: "FFE9ECEF" } },
+      },
+    };
+
+    addedRow.eachCell((cell, colNumber) => {
+      const columnConfig = columns[colNumber - 1];
+      // Check if there's a cell-specific style function
+      const cellSpecificStyle = columnConfig?.cellStyle?.(row, rowIndex + 2);
+      cell.style = {
+        ...defaultDataStyle,
+        ...dataStyle,
+        ...columnConfig?.style,
+        ...cellSpecificStyle,
+      };
+    });
+  });
+
+  // Apply conditional formatting
+  columns.forEach((col, colIndex) => {
+    if (!col.conditionalFormatting || col.conditionalFormatting.length === 0) return;
+
+    const numberToColumn = (idx: number) => {
+      let n = idx + 1;
+      let s = "";
+      while (n > 0) {
+        const r = (n - 1) % 26;
+        s = String.fromCharCode(65 + r) + s;
+        n = Math.floor((n - 1) / 26);
+      }
+      return s;
+    };
+
+    const colLetter = numberToColumn(colIndex); // supports AA, AB...
+    const rangeStart = `${colLetter}2`; // Start from row 2 (after header)
+    const rangeEnd = `${colLetter}${data.length + 1}`;
+    const range = `${rangeStart}:${rangeEnd}`;
+
+    col.conditionalFormatting.forEach((rule) => {
+      if (rule.type === "cellIs" && rule.operator && rule.style) {
+        worksheet.addConditionalFormatting({
+          ref: range,
+          rules: [
+            {
+              type: "cellIs",
+              operator: rule.operator,
+              formulae: [String(rule.value), rule.value2 ? String(rule.value2) : undefined].filter(
+                Boolean
+              ) as string[],
+              style: rule.style as any,
+              priority: rule.priority ?? 1,
+            },
+          ],
+        });
+      } else if (rule.type === "expression" && rule.formula && rule.style) {
+        worksheet.addConditionalFormatting({
+          ref: range,
+          rules: [
+            {
+              type: "expression",
+              formulae: [rule.formula],
+              style: rule.style as any,
+              priority: rule.priority ?? 1,
+            },
+          ],
+        });
+      } else if (rule.type === "colorScale" && rule.colorScale) {
+        worksheet.addConditionalFormatting({
+          ref: range,
+          rules: [
+            {
+              type: "colorScale",
+              cfvo: [
+                { type: "min" },
+                ...(rule.colorScale.mid ? [{ type: "percentile" as const, value: 50 }] : []),
+                { type: "max" },
+              ],
+              color: [
+                rule.colorScale.min ? { argb: rule.colorScale.min.color.replace("#", "FF") } : undefined,
+                ...(rule.colorScale.mid
+                  ? [{ argb: rule.colorScale.mid.color.replace("#", "FF") }]
+                  : []),
+                rule.colorScale.max ? { argb: rule.colorScale.max.color.replace("#", "FF") } : undefined,
+              ].filter(Boolean) as any[],
+              priority: rule.priority ?? 1,
+            },
+          ],
+        });
+      } else if (rule.type === "dataBar" && rule.dataBar) {
+        worksheet.addConditionalFormatting({
+          ref: range,
+          rules: [
+            {
+              type: "dataBar",
+              cfvo: [{ type: "min" }, { type: "max" }],
+              color: rule.dataBar.color.replace("#", ""),
+              showValue: rule.dataBar.showValue ?? true,
+              priority: rule.priority ?? 1,
+            } as any,
+          ],
+        });
+      }
+    });
+  });
+
+  // Apply global conditional formatting
+  if (options.conditionalFormatting) {
+    options.conditionalFormatting.forEach((formatting) => {
+      formatting.rules.forEach((rule) => {
+        if (rule.type === "expression" && rule.formula && rule.style) {
+          worksheet.addConditionalFormatting({
+            ref: formatting.range,
+            rules: [
+              {
+                type: "expression",
+                formulae: [rule.formula],
+                style: rule.style as any,
+                priority: 1,
+              },
+            ],
+          });
+        } else if (rule.type === "cellIs" && rule.operator && rule.style) {
+          worksheet.addConditionalFormatting({
+            ref: formatting.range,
+            rules: [
+              {
+                type: "cellIs",
+                operator: rule.operator,
+                formulae: [String(rule.value), rule.value2 ? String(rule.value2) : undefined].filter(
+                  Boolean
+                ) as string[],
+                style: rule.style as any,
+                priority: 1,
+              },
+            ],
+          });
+        } else if (rule.type === "colorScale" && rule.colorScale) {
+          worksheet.addConditionalFormatting({
+            ref: formatting.range,
+            rules: [
+              {
+                type: "colorScale",
+                cfvo: [
+                  { type: "min" },
+                  ...(rule.colorScale.mid ? [{ type: "percentile" as const, value: 50 }] : []),
+                  { type: "max" },
+                ],
+                color: [
+                  rule.colorScale.min,
+                  ...(rule.colorScale.mid ? [rule.colorScale.mid] : []),
+                  rule.colorScale.max,
+                ].filter(Boolean) as any[],
+                priority: 1,
+              },
+            ],
+          });
+        }
+      });
+    });
+  }
+
+  // Auto-filter
+  if (enableAutoFilter && data.length > 0) {
+    worksheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: data.length + 1, column: columns.length },
+    };
+  }
+
+  // Freeze panes
+  if (freezeRows > 0 || freezeColumns > 0) {
+    worksheet.views = [
+      {
+        state: "frozen",
+        xSplit: freezeColumns,
+        ySplit: freezeRows,
+        activeCell: "A1",
+      },
+    ];
+  }
+
+  // Generate buffer and download
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`;
+  link.click();
+  window.URL.revokeObjectURL(url);
 };

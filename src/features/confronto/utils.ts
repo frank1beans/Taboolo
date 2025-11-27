@@ -1,42 +1,8 @@
+import { ImpresaView, OffertaRecord } from "./types";
+
 /**
  * Utility functions per il confronto offerte
  */
-
-export interface ImpresaView {
-  nomeImpresa: string;
-  roundNumber: number | null;
-  roundLabel: string | null;
-  impresaOriginale: string | null;
-  normalizedLabel: string | null;
-}
-
-export interface OffertaRecord {
-  quantita?: number;
-  prezzoUnitario?: number;
-  importoTotale?: number;
-  criticita?: string;
-  note?: string;
-}
-
-export interface ConfrontoRow {
-  id: string;
-  codice: string;
-  descrizione: string;
-  descrizione_estesa?: string | null;
-  um: string;
-  quantita: number;
-  prezzoUnitarioProgetto: number;
-  importoTotaleProgetto: number;
-  wbs6Code?: string | null;
-  wbs6Description?: string | null;
-  wbs7Code?: string | null;
-  wbs7Description?: string | null;
-  mediaPrezzi?: number | null;
-  minimoPrezzi?: number | null;
-  massimoPrezzi?: number | null;
-  deviazionePrezzi?: number | null;
-  [key: string]: any;
-}
 
 export const slugifyFieldId = (value: string): string =>
   value
@@ -47,11 +13,10 @@ export const slugifyFieldId = (value: string): string =>
     .toLowerCase() || "impresa";
 
 export const getImpresaFieldPrefix = (impresa: ImpresaView): string => {
-  const base =
-    impresa.roundNumber != null
-      ? `${impresa.nomeImpresa}_round_${impresa.roundNumber}`
-      : impresa.nomeImpresa;
-  return slugifyFieldId(base ?? `impresa_${impresa.roundNumber ?? "all"}`);
+  // Usa solo il nomeImpresa che già include il round se presente (es. "CEV (Round 1)")
+  // Non aggiungere manualmente il round number per evitare duplicazioni
+  const base = impresa.nomeImpresa || `impresa_${impresa.roundNumber ?? "unknown"}`;
+  return slugifyFieldId(base);
 };
 
 export const getImpresaHeaderLabel = (impresa: ImpresaView): string => {
@@ -127,4 +92,36 @@ export const getColorForIndex = (index: number, isDarkMode: boolean) => {
     bg: isDarkMode ? colorSet.bg.dark : colorSet.bg.light,
     border: isDarkMode ? colorSet.border.dark : colorSet.border.light,
   };
+};
+
+export const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+export const getDeltaVisual = (val: number | null | undefined) => {
+  if (val == null) {
+    return { text: "–", bg: undefined, color: undefined, icon: "" };
+  }
+  const abs = clamp(Math.abs(val), 0, 100);
+  const opacity = 0.12 + abs / 900; // più visibile
+  // Riferimento: progetto. Più alto = peggio (rosso), più basso = meglio (verde).
+  const isGood = val < 0;
+  const bg = isGood
+    ? `rgba(34,197,94,${opacity})`
+    : val > 0
+      ? `rgba(239,68,68,${opacity})`
+      : `rgba(148,163,184,0.2)`;
+  const color = isGood ? "#166534" : val > 0 ? "#b91c1c" : "#475569";
+  const icon = isGood ? "↓" : val > 0 ? "↑" : "•";
+  const text = `${val > 0 ? "+" : ""}${val.toFixed(2)}%`;
+  return { text, bg, color, icon };
+};
+
+export const getHeatmapBg = (delta: number | null | undefined, baseBg: string) => {
+  if (delta == null) return baseBg;
+  const abs = clamp(Math.abs(delta), 0, 80);
+  const tint = 0.1 + abs / 500; // intensità leggermente più alta
+  return delta > 0
+    ? `rgba(239,68,68,${tint})`
+    : delta < 0
+      ? `rgba(34,197,94,${tint})`
+      : baseBg;
 };
