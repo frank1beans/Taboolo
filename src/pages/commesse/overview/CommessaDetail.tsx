@@ -132,6 +132,7 @@ const CommessaDetail = () => {
       quantityColumn,
       wbs6CodeColumn,
       wbs6DescriptionColumn,
+      progressColumn,
     }: {
       file: File;
       impresa: string;
@@ -156,6 +157,8 @@ const CommessaDetail = () => {
         descriptionColumns,
         priceColumn,
         quantityColumn,
+        progressColumn,
+        mode: "lc",
       }),
     onSuccess: async () => {
       await invalidateCommessaData();

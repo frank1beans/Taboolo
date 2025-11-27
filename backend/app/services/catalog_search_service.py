@@ -3,14 +3,14 @@ import re
 from typing import Any, Sequence
 
 import numpy as np
-from sqlalchemy import or_, func
+from sqlalchemy import func, or_
 from app.api.deps import DBSession
 from app.db.models import Commessa, PriceListItem
-from app.services import (
+from app.services.nlp import (
+    extract_construction_attributes,
     price_list_faiss_service,
     semantic_embedding_service,
 )
-from app.services.nlp import extract_construction_attributes
 from app.services.serialization_service import (
     collect_price_list_offers,
     collect_project_quantities,

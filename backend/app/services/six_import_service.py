@@ -95,12 +95,13 @@ class _AggregatedVoce:
     wbs_levels: list[ParsedWbsLevel]
     unita: str | None
     progressivo: int | None
+    preventivo_id: str | None
     ordine: int
     quantita: Decimal = field(default_factory=lambda: Decimal("0"))
     notes: set[str] = field(default_factory=set)
-    progressivi: set[int] = field(default_factory=set)
+    progressivi: set[tuple[str, int]] = field(default_factory=set)
     lista_ids: set[str] = field(default_factory=set)
-    reference_ids: set[int] = field(default_factory=set)
+    reference_ids: set[tuple[str, int]] = field(default_factory=set)
     line_amount_total: Decimal = field(default_factory=lambda: Decimal("0.00"))
 
 
@@ -413,9 +414,10 @@ class SixParser:
         self._price_list_alias_priorities: dict[str, int] = {}
         self.primary_price_list_id: str | None = None
         self._primary_price_list_priority: int = -1
-        self._raw_progressivo_quantities: dict[int, Decimal] = {}
-        self._progressivo_references: dict[int, list[tuple[int, Decimal]]] = {}
-        self._resolved_progressivo_quantities: dict[int, Decimal | None] = {}
+        # progressivo_key = (preventivo_id, progressivo)
+        self._raw_progressivo_quantities: dict[tuple[str, int], Decimal] = {}
+        self._progressivo_references: dict[tuple[str, int], list[tuple[tuple[str, int], Decimal]]] = {}
+        self._resolved_progressivo_quantities: dict[tuple[str, int], Decimal | None] = {}
         self.last_used_product_ids: set[str] | None = None
         self._parse_price_lists()
         self._parse_units()
@@ -528,11 +530,11 @@ class SixParser:
         price_preference = self._build_price_preference(preventivo_price_list)
 
         aggregates: dict[
-            tuple[str, tuple[tuple[int, str], ...], str | None, str | None],
+            tuple[str, int | None, tuple[tuple[int, str], ...], str | None, str | None],
             _AggregatedVoce,
         ] = {}
         ordered_keys: list[
-            tuple[str, tuple[tuple[int, str], ...], str | None, str | None]
+            tuple[str, int | None, tuple[tuple[int, str], ...], str | None, str | None]
         ] = []
         used_product_ids: set[str] = set()
 
@@ -548,7 +550,7 @@ class SixParser:
 
             progressivo = _to_int(rilevazione.attrib.get("progressivo"))
             comments = self._collect_comments(rilevazione)
-            reference_entries = self._collect_reference_entries(rilevazione)
+            reference_entries = self._collect_reference_entries(rilevazione, target_id)
             raw_quantita = self._compute_quantity(rilevazione)
             quantita: Decimal = raw_quantita if raw_quantita is not None else Decimal("0")
             lista_id = self._map_price_list_id(
@@ -558,12 +560,12 @@ class SixParser:
             missing_refs: list[int] = []
             if reference_entries:
                 ref_total = Decimal("0")
-                for ref_prog, factor in reference_entries:
-                    ref_value = self._resolved_progressivo_quantities.get(ref_prog)
+                for ref_key, factor in reference_entries:
+                    ref_value = self._resolved_progressivo_quantities.get(ref_key)
                     if ref_value is None:
-                        ref_value = self._raw_progressivo_quantities.get(ref_prog)
+                        ref_value = self._raw_progressivo_quantities.get(ref_key)
                     if ref_value is None:
-                        missing_refs.append(ref_prog)
+                        missing_refs.append(ref_key[1])
                         continue
                     ref_total += Decimal(str(factor)) * ref_value
                 if ref_total:
@@ -589,7 +591,12 @@ class SixParser:
                 )
                 continue
 
-            aggregate_key = self._build_aggregate_key(product, wbs_levels)
+            aggregate_key = self._build_aggregate_key(
+                product,
+                wbs_levels,
+                progressivo,
+                target_id,
+            )
             entry = aggregates.get(aggregate_key)
             if entry is None:
                 entry = _AggregatedVoce(
@@ -598,6 +605,7 @@ class SixParser:
                     wbs_levels=wbs_levels,
                     unita=product.unit_label,
                     progressivo=progressivo,
+                    preventivo_id=target_id,
                     ordine=len(ordered_keys),
                 )
                 aggregates[aggregate_key] = entry
@@ -612,11 +620,11 @@ class SixParser:
                     )
 
             if progressivo is not None:
-                entry.progressivi.add(progressivo)
+                entry.progressivi.add((target_id, progressivo))
             if lista_id:
                 entry.lista_ids.add(lista_id)
             if reference_entries:
-                entry.reference_ids.update(ref_prog for ref_prog, _ in reference_entries)
+                entry.reference_ids.update(ref_key for ref_key, _ in reference_entries)
 
             quantita, line_amount = self._calculate_line_amount(quantita, prezzo)
             entry.quantita += quantita
@@ -672,8 +680,15 @@ class SixParser:
                     for list_id in entry.lista_ids
                     if list_id in self.price_lists
                 },
-                "progressivi": sorted(entry.progressivi),
-                "reference_progressivi": sorted(entry.reference_ids),
+                "progressivi": [
+                    {"preventivo_id": pid, "progressivo": prog}
+                    for pid, prog in sorted(entry.progressivi, key=lambda x: (x[0], x[1]))
+                ],
+                "reference_progressivi": [
+                    {"preventivo_id": pid, "progressivo": prog}
+                    for pid, prog in sorted(entry.reference_ids, key=lambda x: (x[0], x[1]))
+                ],
+                "preventivo_id": entry.preventivo_id,
                 "wbs6_code": entry.product.wbs6_code,
                 "wbs7_code": entry.product.wbs7_code,
                 "wbs_path": meta_wbs_path,
@@ -772,7 +787,9 @@ class SixParser:
         self,
         product: _ProductEntry,
         wbs_levels: Sequence[ParsedWbsLevel],
-    ) -> tuple[str, tuple[tuple[int, str], ...], str | None, str | None]:
+        progressivo: int | None,
+        preventivo_id: str,
+    ) -> tuple[str, int | None, tuple[tuple[int, str], ...], str | None, str | None]:
         spatial_tokens: list[tuple[int, str]] = []
         wbs6_token: str | None = None
         wbs7_token: str | None = None
@@ -790,7 +807,8 @@ class SixParser:
             wbs6_token = self._pick_identifier(product.wbs6_code, product.wbs6_description)
         if wbs7_token is None:
             wbs7_token = self._pick_identifier(product.wbs7_code, product.wbs7_description)
-        return (product.code, tuple(spatial_tokens), wbs6_token, wbs7_token)
+        # Includiamo preventivo e progressivo nell'aggregate key
+        return (preventivo_id, progressivo, tuple(spatial_tokens), wbs6_token, wbs7_token)
 
     def _build_price_list_stats(self) -> list[dict[str, Any]]:
         stats: dict[str, dict[str, Any]] = {}
@@ -1072,7 +1090,8 @@ class SixParser:
     def _collect_reference_entries(
         self,
         rilevazione: ET.Element,
-    ) -> list[tuple[int, Decimal]]:
+        preventivo_id: str,
+    ) -> list[tuple[tuple[str, int], Decimal]]:
         entries: list[tuple[int, Decimal]] = []
         current_sign = 1
         for misura in rilevazione.findall(f"{self.ns}prvMisura"):
@@ -1086,7 +1105,7 @@ class SixParser:
                 continue
             multiplier = context.product if context.product is not None else Decimal("1")
             for ref_prog in context.references:
-                entries.append((ref_prog, Decimal(str(current_sign)) * multiplier))
+                entries.append(((preventivo_id, ref_prog), Decimal(str(current_sign)) * multiplier))
         return entries
 
     @staticmethod
@@ -1450,10 +1469,10 @@ class SixParser:
                         continue
                     # Allinea il totale preview con il calcolo principale: quantità dirette + riferimenti
                     quantita_dec: Decimal = self._compute_quantity(rilevazione) or Decimal("0")
-                    for ref_prog, factor in self._collect_reference_entries(rilevazione):
-                        ref_val = self._resolved_progressivo_quantities.get(ref_prog)
+                    for ref_prog_key, factor in self._collect_reference_entries(rilevazione, preventivo_id):
+                        ref_val = self._resolved_progressivo_quantities.get(ref_prog_key)
                         if ref_val is None:
-                            ref_val = self._raw_progressivo_quantities.get(ref_prog)
+                            ref_val = self._raw_progressivo_quantities.get(ref_prog_key)
                         if ref_val is None:
                             continue
                         quantita_dec += factor * ref_val
@@ -1520,9 +1539,8 @@ class SixParser:
     def _precompute_raw_quantities(self) -> None:
         self._raw_progressivo_quantities.clear()
         self._progressivo_references.clear()
-        
         progressivo_owner: dict[int, str] = {}
-        
+
         for preventivo in self.root.findall(f".//{self.ns}preventivo"):
             preventivo_id = preventivo.attrib.get("preventivoId") or "unknown"
             
@@ -1530,56 +1548,57 @@ class SixParser:
                 progressivo = _to_int(rilevazione.attrib.get("progressivo"))
                 if progressivo is None:
                     continue
-                
-                # Check for conflicts
-                if progressivo in progressivo_owner:
-                    existing_owner = progressivo_owner[progressivo]
-                    if existing_owner != preventivo_id:
-                        raise ValueError(
-                            f"Progressivo {progressivo} usato in più preventivi: "
-                            f"{existing_owner} e {preventivo_id}"
-                        )
-                else:
-                    progressivo_owner[progressivo] = preventivo_id
-                
+
+                existing_owner = progressivo_owner.get(progressivo)
+                if existing_owner and existing_owner != preventivo_id:
+                    logger.warning(
+                        "Progressivo %s presente in più preventivi (%s, %s): uso il primo.",
+                        progressivo,
+                        existing_owner,
+                        preventivo_id,
+                    )
+                    continue
+                progressivo_owner.setdefault(progressivo, preventivo_id)
+                progressivo_key = (preventivo_id, progressivo)
+
                 quantity = self._compute_quantity(rilevazione)
-                self._raw_progressivo_quantities[progressivo] = quantity or Decimal("0")
-                references = self._collect_reference_entries(rilevazione)
+                self._raw_progressivo_quantities[progressivo_key] = quantity or Decimal("0")
+                references = self._collect_reference_entries(rilevazione, preventivo_id)
                 if references:
-                    self._progressivo_references[progressivo] = references
+                    self._progressivo_references[progressivo_key] = references
         
         self._resolved_progressivo_quantities.clear()
         all_progressivi = set(self._raw_progressivo_quantities.keys()) | set(
             self._progressivo_references.keys()
         )
-        for progressivo in all_progressivi:
-            self._resolve_progressivo_quantity(progressivo, set())
+        for progressivo_key in all_progressivi:
+            self._resolve_progressivo_quantity(progressivo_key, set())
 
     def _resolve_progressivo_quantity(
         self,
-        progressivo: int,
-        stack: set[int],
+        progressivo_key: tuple[str, int],
+        stack: set[tuple[str, int]],
     ) -> Decimal | None:
-        cached = self._resolved_progressivo_quantities.get(progressivo)
+        cached = self._resolved_progressivo_quantities.get(progressivo_key)
         if cached is not None:
             return cached
-        if progressivo in stack:
-            message = f"Riferimento circolare tra progressivi: {progressivo} -> {sorted(stack)}"
+        if progressivo_key in stack:
+            message = f"Riferimento circolare tra progressivi: {progressivo_key} -> {sorted(stack)}"
             logger.error(message)
             raise ValueError(message)
 
-        stack.add(progressivo)
-        base_value = self._raw_progressivo_quantities.get(progressivo) or Decimal("0")
+        stack.add(progressivo_key)
+        base_value = self._raw_progressivo_quantities.get(progressivo_key) or Decimal("0")
         total = base_value
-        for ref_prog, factor in self._progressivo_references.get(progressivo, []):
-            ref_value = self._resolve_progressivo_quantity(ref_prog, stack)
+        for ref_prog_key, factor in self._progressivo_references.get(progressivo_key, []):
+            ref_value = self._resolve_progressivo_quantity(ref_prog_key, stack)
             if ref_value is None:
                 continue
             total += factor * ref_value
-        stack.remove(progressivo)
+        stack.remove(progressivo_key)
 
         resolved = total if abs(total) > Decimal("1e-12") else None
-        self._resolved_progressivo_quantities[progressivo] = resolved
+        self._resolved_progressivo_quantities[progressivo_key] = resolved
         return resolved
 
     def _parse_soa_categories(self) -> None:

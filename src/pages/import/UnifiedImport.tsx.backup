@@ -1,0 +1,683 @@
+import { useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+import { read, utils } from "xlsx";
+
+import { UploadArea } from "@/components/UploadArea";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { useToast } from "@/hooks/use-toast";
+import { api } from "@/lib/api-client";
+
+type ImportMode = "mc" | "lc";
+type UploadKind = "single" | "multi-impresa" | "batch";
+
+type JobRow = {
+  id: string;
+  file: File;
+  fileName: string;
+  size: number;
+  mode: ImportMode;
+  kind: UploadKind;
+  sheet?: string;
+  sheets?: string[];
+  status: "ready" | "running" | "done" | "error";
+  headersFound: string[];
+  headersMissing: string[];
+  warning?: string;
+  impresa: string;
+  priceColumn?: string;
+  quantityColumn?: string;
+  progressiveColumn?: string;
+  roundMode: "auto" | "new" | "replace";
+  roundNumber?: number | null;
+};
+
+const formatSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
+const readHeadersFromFile = async (
+  file: File,
+  sheetName?: string,
+): Promise<{ headers: string[]; sheets: string[]; effectiveSheet?: string }> => {
+  const buffer = await file.arrayBuffer();
+  const workbook = read(buffer, { type: "array" });
+  const sheetNames = workbook.SheetNames || [];
+  const targetSheet = sheetName && sheetNames.includes(sheetName) ? sheetName : sheetNames[0];
+  const sheet = targetSheet ? workbook.Sheets[targetSheet] : undefined;
+  if (!sheet) return { headers: [], sheets: sheetNames, effectiveSheet: targetSheet };
+  const rows = utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" }) as (string | number)[][];
+  const header = rows.find((row) => row.some((cell) => String(cell).trim())) ?? [];
+  const headers = header.map((cell) => String(cell).trim()).filter(Boolean);
+  return { headers, sheets: sheetNames, effectiveSheet: targetSheet };
+};
+
+export default function UnifiedImport() {
+  const { id } = useParams();
+  const commessaId = id ? Number(id) : undefined;
+  const { toast } = useToast();
+
+  // Step 1: Configurazione
+  const [mode, setMode] = useState<ImportMode>("mc");
+  const [kind, setKind] = useState<UploadKind>("single");
+  const [impresa, setImpresa] = useState<string>("");
+  const [roundMode, setRoundMode] = useState<"auto" | "new" | "replace">("auto");
+  const [roundNumber, setRoundNumber] = useState<string>("");
+
+  // Step 2: File caricato
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [sheets, setSheets] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState<string>("");
+  const [headers, setHeaders] = useState<string[]>([]);
+
+  // Step 3: Mappatura colonne
+  const [priceColumn, setPriceColumn] = useState<string>("");
+  const [quantityColumn, setQuantityColumn] = useState<string>("");
+  const [progressiveColumn, setProgressiveColumn] = useState<string>("");
+  const [codeColumns, setCodeColumns] = useState<string[]>([]);
+  const [descriptionColumns, setDescriptionColumns] = useState<string[]>([]);
+
+  // Multi-impresa config
+  const [multiConfig, setMultiConfig] = useState<
+    Array<{
+      id: string;
+      impresa: string;
+      priceColumn: string;
+      quantityColumn: string;
+      roundMode: "auto" | "new" | "replace";
+      roundNumber?: string;
+    }>
+  >([{ id: crypto.randomUUID(), impresa: "", priceColumn: "", quantityColumn: "", roundMode: "auto", roundNumber: "" }]);
+
+  const handleFileUpload = async (file: File) => {
+    const { headers: foundHeaders, sheets: foundSheets, effectiveSheet } = await readHeadersFromFile(file);
+
+    setUploadedFile(file);
+    setSheets(foundSheets);
+    setSelectedSheet(effectiveSheet || foundSheets[0] || "");
+    setHeaders(foundHeaders);
+
+    // Auto-detect columns
+    const autoPrice = foundHeaders[0] || "";
+    const autoQuantity = foundHeaders.find((h) => h.toLowerCase().includes("quant")) || "";
+    const autoProgressive = foundHeaders.find((h) => h.toLowerCase().includes("prog")) || "";
+    const autoCode = foundHeaders.filter((h) => {
+      const lower = h.toLowerCase();
+      return lower.includes("cod") || lower.includes("art") || lower === "n.";
+    });
+    const autoDescription = foundHeaders.filter((h) => {
+      const lower = h.toLowerCase();
+      return lower.includes("desc") || lower.includes("voce");
+    });
+
+    setPriceColumn(autoPrice);
+    setQuantityColumn(autoQuantity);
+    setProgressiveColumn(autoProgressive);
+    setCodeColumns(autoCode);
+    setDescriptionColumns(autoDescription);
+
+    toast({
+      title: "File caricato",
+      description: `${foundHeaders.length} colonne trovate nel foglio "${effectiveSheet || foundSheets[0]}"`,
+    });
+  };
+
+  const handleSheetChange = async (newSheet: string) => {
+    if (!uploadedFile) return;
+    setSelectedSheet(newSheet);
+
+    const { headers: foundHeaders } = await readHeadersFromFile(uploadedFile, newSheet);
+    setHeaders(foundHeaders);
+
+    // Re-auto-detect columns
+    const autoPrice = foundHeaders[0] || "";
+    const autoQuantity = foundHeaders.find((h) => h.toLowerCase().includes("quant")) || "";
+    const autoProgressive = foundHeaders.find((h) => h.toLowerCase().includes("prog")) || "";
+    const autoCode = foundHeaders.filter((h) => {
+      const lower = h.toLowerCase();
+      return lower.includes("cod") || lower.includes("art") || lower === "n.";
+    });
+    const autoDescription = foundHeaders.filter((h) => {
+      const lower = h.toLowerCase();
+      return lower.includes("desc") || lower.includes("voce");
+    });
+
+    setPriceColumn(autoPrice);
+    setQuantityColumn(autoQuantity);
+    setProgressiveColumn(autoProgressive);
+    setCodeColumns(autoCode);
+    setDescriptionColumns(autoDescription);
+  };
+
+  const handleRemoveFile = () => {
+    setUploadedFile(null);
+    setSheets([]);
+    setSelectedSheet("");
+    setHeaders([]);
+    setPriceColumn("");
+    setQuantityColumn("");
+    setProgressiveColumn("");
+    setCodeColumns([]);
+    setDescriptionColumns([]);
+  };
+
+  const startImport = async () => {
+    if (!commessaId) {
+      toast({ title: "Commessa non valida", variant: "destructive" });
+      return;
+    }
+
+    if (!uploadedFile) {
+      toast({ title: "Nessun file caricato", variant: "destructive" });
+      return;
+    }
+
+    if (!priceColumn) {
+      toast({ title: "Seleziona la colonna prezzo", variant: "destructive" });
+      return;
+    }
+
+    if (mode === "mc" && descriptionColumns.filter((c) => c.trim()).length === 0) {
+      toast({ title: "Per la modalità MC è necessaria almeno una colonna descrizione", variant: "destructive" });
+      return;
+    }
+
+    try {
+      if (kind === "multi-impresa") {
+        const config = multiConfig
+          .filter((c) => c.impresa.trim())
+          .map((c) => ({
+            nome_impresa: c.impresa.trim(),
+            colonna_prezzo: c.priceColumn || priceColumn,
+            colonna_quantita: c.quantityColumn || quantityColumn,
+            round_mode: c.roundMode,
+            round_number: c.roundNumber ? Number(c.roundNumber) : undefined,
+          }));
+
+        if (!config.length) {
+          throw new Error("Configura almeno un'impresa");
+        }
+
+        await api.uploadRitorniBatchSingleFile(commessaId, {
+          file: uploadedFile,
+          impreseConfig: config,
+          sheetName: selectedSheet || undefined,
+          codeColumns: codeColumns.length > 0 ? codeColumns : undefined,
+          descriptionColumns: descriptionColumns.length > 0 ? descriptionColumns : undefined,
+          progressiveColumn: progressiveColumn || undefined,
+        });
+      } else {
+        if (!impresa.trim()) {
+          throw new Error("Inserisci il nome dell'impresa");
+        }
+
+        await api.uploadRitorno(commessaId, {
+          file: uploadedFile,
+          impresa: impresa.trim(),
+          roundMode: roundMode === "auto" ? "new" : roundMode,
+          roundNumber: roundNumber ? Number(roundNumber) : undefined,
+          sheetName: selectedSheet || "",
+          codeColumns: codeColumns,
+          descriptionColumns: descriptionColumns,
+          priceColumn: priceColumn,
+          quantityColumn: quantityColumn || undefined,
+          progressColumn: progressiveColumn || undefined,
+        });
+      }
+
+      toast({ title: "Import completato", description: "File inviato al backend con successo." });
+      handleRemoveFile();
+    } catch (error: any) {
+      toast({ title: "Errore import", description: String(error?.message ?? error), variant: "destructive" });
+    }
+  };
+
+  const modeLabel = useMemo(() => (mode === "mc" ? "MC (header + Totale)" : "LC lineare"), [mode]);
+  const canImport =
+    uploadedFile &&
+    priceColumn &&
+    (kind === "multi-impresa" || impresa.trim()) &&
+    (mode === "lc" || descriptionColumns.filter((c) => c.trim()).length > 0);
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Import ritorni di gara</CardTitle>
+          <CardDescription>Commessa {commessaId ?? "-"} · Flusso guidato per l'import</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* STEP 1: CONFIGURAZIONE */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="font-mono">
+                1
+              </Badge>
+              <h3 className="text-lg font-semibold">Configurazione</h3>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="space-y-3">
+                <Label>Modalità parsing</Label>
+                <RadioGroup value={mode} onValueChange={(val) => setMode(val as ImportMode)} className="flex flex-col gap-2">
+                  <Label className="flex items-center gap-2 font-normal cursor-pointer">
+                    <RadioGroupItem value="mc" id="mode-mc" />
+                    MC (usa header + riga Totale, richiede progressivo)
+                  </Label>
+                  <Label className="flex items-center gap-2 font-normal cursor-pointer">
+                    <RadioGroupItem value="lc" id="mode-lc" />
+                    LC (lineare, una riga = una voce)
+                  </Label>
+                </RadioGroup>
+              </div>
+
+              <div className="space-y-3">
+                <Label>Tipo upload</Label>
+                <RadioGroup value={kind} onValueChange={(val) => setKind(val as UploadKind)} className="flex flex-col gap-2">
+                  <Label className="flex items-center gap-2 font-normal cursor-pointer">
+                    <RadioGroupItem value="single" id="kind-single" />
+                    File singolo (un'impresa)
+                  </Label>
+                  <Label className="flex items-center gap-2 font-normal cursor-pointer">
+                    <RadioGroupItem value="multi-impresa" id="kind-multi" />
+                    Multi-impresa (un file, più imprese)
+                  </Label>
+                  <Label className="flex items-center gap-2 font-normal cursor-pointer">
+                    <RadioGroupItem value="batch" id="kind-batch" />
+                    Batch (non implementato)
+                  </Label>
+                </RadioGroup>
+              </div>
+            </div>
+
+            {kind !== "multi-impresa" && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Nome impresa</Label>
+                  <Input placeholder="Es. Impresa Rossi S.r.l." value={impresa} onChange={(e) => setImpresa(e.target.value)} />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Round</Label>
+                  <div className="flex gap-2">
+                    <Select value={roundMode} onValueChange={(val) => setRoundMode(val as "auto" | "new" | "replace")}>
+                      <SelectTrigger className="w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Auto</SelectItem>
+                        <SelectItem value="new">Nuovo</SelectItem>
+                        <SelectItem value="replace">Replace</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      placeholder="Numero round"
+                      value={roundNumber}
+                      onChange={(e) => setRoundNumber(e.target.value)}
+                      disabled={roundMode === "auto"}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <Separator />
+
+          {/* STEP 2: CARICAMENTO FILE */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="font-mono">
+                2
+              </Badge>
+              <h3 className="text-lg font-semibold">Carica file Excel</h3>
+            </div>
+
+            {!uploadedFile ? (
+              <UploadArea
+                onFileUpload={handleFileUpload}
+                emptyStateTitle="Trascina qui il file Excel"
+                emptyStateDescription="oppure clicca per selezionarlo"
+                submitLabel="Carica file"
+                successMessage={null}
+              />
+            ) : (
+              <Card className="border-accent bg-accent/5">
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">{uploadedFile.name}</p>
+                      <p className="text-sm text-muted-foreground">{formatSize(uploadedFile.size)}</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={handleRemoveFile}>
+                      Rimuovi
+                    </Button>
+                  </div>
+
+                  {sheets.length > 1 && (
+                    <div className="mt-4 space-y-2">
+                      <Label>Foglio Excel</Label>
+                      <Select value={selectedSheet} onValueChange={handleSheetChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Seleziona foglio" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {sheets.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              {s}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* STEP 3: MAPPATURA COLONNE (solo se file caricato) */}
+          {uploadedFile && headers.length > 0 && (
+            <>
+              <Separator />
+
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="font-mono">
+                    3
+                  </Badge>
+                  <h3 className="text-lg font-semibold">Mappa colonne</h3>
+                </div>
+
+                <p className="text-sm text-muted-foreground">
+                  Trovate {headers.length} colonne: {headers.join(", ")}
+                </p>
+
+                {/* Colonne comuni (codice, descrizione, progressivo) - SEMPRE visibili */}
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {multiConfig.map((row) => (
+                          <div key={row.id} className="grid grid-cols-5 gap-2 items-end">
+                            <Input
+                              placeholder="Nome impresa"
+                              value={row.impresa}
+                              onChange={(e) =>
+                                setMultiConfig((prev) => prev.map((r) => (r.id === row.id ? { ...r, impresa: e.target.value } : r)))
+                              }
+                            />
+                            <Select
+                              value={row.priceColumn}
+                              onValueChange={(val) =>
+                                setMultiConfig((prev) => prev.map((r) => (r.id === row.id ? { ...r, priceColumn: val } : r)))
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Prezzo" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {headers.map((h) => (
+                                  <SelectItem key={h} value={h}>
+                                    {h}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={row.quantityColumn}
+                              onValueChange={(val) =>
+                                setMultiConfig((prev) => prev.map((r) => (r.id === row.id ? { ...r, quantityColumn: val } : r)))
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Quantità" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {headers.map((h) => (
+                                  <SelectItem key={h} value={h}>
+                                    {h}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={row.roundMode}
+                              onValueChange={(val) =>
+                                setMultiConfig((prev) =>
+                                  prev.map((r) => (r.id === row.id ? { ...r, roundMode: val as "auto" | "new" | "replace" } : r)),
+                                )
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="auto">Auto</SelectItem>
+                                <SelectItem value="new">New</SelectItem>
+                                <SelectItem value="replace">Replace</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              placeholder="Round #"
+                              value={row.roundNumber ?? ""}
+                              onChange={(e) =>
+                                setMultiConfig((prev) => prev.map((r) => (r.id === row.id ? { ...r, roundNumber: e.target.value } : r)))
+                              }
+                              disabled={row.roundMode === "auto"}
+                            />
+                          </div>
+                        ))}
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setMultiConfig((prev) => [
+                                ...prev,
+                                { id: crypto.randomUUID(), impresa: "", priceColumn: "", quantityColumn: "", roundMode: "auto" },
+                              ])
+                            }
+                          >
+                            Aggiungi impresa
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setMultiConfig((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
+                            disabled={multiConfig.length <= 1}
+                          >
+                            Rimuovi ultima
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Separator />
+                  </>
+                )}
+
+                {/* Colonne comuni (codice, descrizione, progressivo) - per tutti i tipi */}
+                <div className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>
+                          Colonne codice {mode === "lc" && "(opzionale)"}
+                        </Label>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Puoi selezionare più colonne che verranno combinate
+                        </p>
+                        <div className="space-y-2">
+                          {codeColumns.map((col, idx) => (
+                            <div key={idx} className="flex gap-2">
+                              <Select
+                                value={col}
+                                onValueChange={(val) => {
+                                  const newCols = [...codeColumns];
+                                  newCols[idx] = val;
+                                  setCodeColumns(newCols);
+                                }}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Seleziona colonna" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {headers.map((h) => (
+                                    <SelectItem key={h} value={h}>
+                                      {h}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setCodeColumns(codeColumns.filter((_, i) => i !== idx))}
+                              >
+                                ×
+                              </Button>
+                            </div>
+                          ))}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setCodeColumns([...codeColumns, ""])}
+                          >
+                            + Aggiungi colonna codice
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>
+                          Colonne descrizione {mode === "mc" && <span className="text-destructive">*</span>}
+                        </Label>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          {mode === "mc"
+                            ? 'Per MC serve trovare la riga con "TOTALE"'
+                            : "Puoi selezionare più colonne che verranno combinate"}
+                        </p>
+                        <div className="space-y-2">
+                          {descriptionColumns.map((col, idx) => (
+                            <div key={idx} className="flex gap-2">
+                              <Select
+                                value={col}
+                                onValueChange={(val) => {
+                                  const newCols = [...descriptionColumns];
+                                  newCols[idx] = val;
+                                  setDescriptionColumns(newCols);
+                                }}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Seleziona colonna" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {headers.map((h) => (
+                                    <SelectItem key={h} value={h}>
+                                      {h}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setDescriptionColumns(descriptionColumns.filter((_, i) => i !== idx))}
+                              >
+                                ×
+                              </Button>
+                            </div>
+                          ))}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setDescriptionColumns([...descriptionColumns, ""])}
+                          >
+                            + Aggiungi colonna descrizione
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                      <div className="space-y-2">
+                        <Label>
+                          Colonna prezzo <span className="text-destructive">*</span>
+                        </Label>
+                        <Select value={priceColumn} onValueChange={setPriceColumn}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleziona colonna" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {headers.map((h) => (
+                              <SelectItem key={h} value={h}>
+                                {h}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Colonna quantità (opzionale)</Label>
+                        <Select value={quantityColumn || "___none___"} onValueChange={(val) => setQuantityColumn(val === "___none___" ? "" : val)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleziona colonna" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="___none___">Nessuna</SelectItem>
+                            {headers.map((h) => (
+                              <SelectItem key={h} value={h}>
+                                {h}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Colonna progressivo (opzionale)</Label>
+                        <Select value={progressiveColumn || "___none___"} onValueChange={(val) => setProgressiveColumn(val === "___none___" ? "" : val)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleziona colonna" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="___none___">Nessuna</SelectItem>
+                            {headers.map((h) => (
+                              <SelectItem key={h} value={h}>
+                                {h}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+              </div>
+            </>
+          )}
+
+          <Separator />
+
+          {/* STEP 4: IMPORT */}
+          <div className="flex items-center justify-between">
+            <div className="flex gap-2">
+              <Badge variant="outline">{modeLabel}</Badge>
+              <Badge variant="secondary">{kind === "batch" ? "Batch" : kind === "multi-impresa" ? "Multi-impresa" : "Singolo"}</Badge>
+            </div>
+            <Button disabled={!canImport} onClick={startImport} size="lg">
+              Avvia import
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

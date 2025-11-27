@@ -956,6 +956,7 @@ async def upload_ritorno_gara(
     request: Request,
     session: DBSession,
     impresa: str = Form(..., min_length=1),
+    mode: str | None = Form(default=None),
     round_mode: str = Form("auto"),
     round_number: int | None = Form(default=None),
     sheet_name: str | None = Form(default=None),
@@ -1002,6 +1003,57 @@ async def upload_ritorno_gara(
         if progressive_column and progressive_column.strip()
         else None
     )
+    normalized_mode = (mode or "").strip().lower() or None
+    if normalized_mode and normalized_mode not in {"mc", "lc"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Modalità import non valida: usare 'mc' oppure 'lc'.",
+        )
+    if normalized_mode == "lc":
+        if not parsed_code_columns:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="In modalità LC devi indicare le colonne codice.",
+            )
+        if not parsed_description_columns:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="In modalità LC devi indicare le colonne descrizione.",
+            )
+        normalized_progressive_column = None
+    if normalized_mode == "lc":
+        if not parsed_code_columns:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="In modalità LC devi indicare le colonne codice.",
+            )
+        if not parsed_description_columns:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="In modalità LC devi indicare le colonne descrizione.",
+            )
+        normalized_progressive_column = None
+        if normalized_price_column is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Seleziona la colonna prezzo in modalità LC.",
+            )
+    if normalized_mode != "mc":
+        missing_price = any(
+            not isinstance(entry, dict)
+            or not (entry.get("colonna_prezzo") or "").strip()
+            for entry in config_payload
+        )
+        if missing_price:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Colonna prezzo mancante in una o più imprese. Seleziona le colonne o usa la modalità MC.",
+            )
+    if normalized_mode != "mc" and normalized_price_column is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Seleziona la colonna prezzo oppure usa la modalità MC.",
+        )
     sheet_name_value = sheet_name.strip() if sheet_name and sheet_name.strip() else None
 
     try:
@@ -1019,6 +1071,7 @@ async def upload_ritorno_gara(
             sheet_price_column=normalized_price_column,
             sheet_quantity_column=normalized_quantity_column,
             sheet_progressive_column=normalized_progressive_column,
+            mode=normalized_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -1048,6 +1101,7 @@ async def upload_ritorni_batch_single_file(
     session: DBSession,
     file: UploadFile = File(...),
     imprese_config: str = Form(..., description="JSON array con colonne prezzo/quantità per impresa"),
+    mode: str | None = Form(default=None),
     sheet_name: str | None = Form(default=None),
     code_columns: str | None = Form(default=None),
     description_columns: str | None = Form(default=None),
@@ -1086,6 +1140,23 @@ async def upload_ritorni_batch_single_file(
         if progressive_column and progressive_column.strip()
         else None
     )
+    normalized_mode = (mode or "").strip().lower() or None
+    if normalized_mode and normalized_mode not in {"mc", "lc"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Modalità import non valida: usare 'mc' oppure 'lc'.",
+        )
+    if normalized_mode != "mc":
+        missing_price = any(
+            not isinstance(entry, dict)
+            or not (entry.get("colonna_prezzo") or "").strip()
+            for entry in config_payload
+        )
+        if missing_price:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Colonna prezzo mancante in una o più imprese. Seleziona le colonne o usa la modalità MC.",
+            )
     sheet_name_value = sheet_name.strip() if sheet_name and sheet_name.strip() else None
 
     try:
@@ -1099,6 +1170,7 @@ async def upload_ritorni_batch_single_file(
             sheet_code_columns=parsed_code_columns,
             sheet_description_columns=parsed_description_columns,
             sheet_progressive_column=normalized_progressive_column,
+            mode=normalized_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

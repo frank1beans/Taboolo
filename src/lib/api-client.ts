@@ -34,6 +34,8 @@ import {
   PropertySchemaResponse,
   PropertyExtractionPayload,
   PropertyExtractionResult,
+  ApiBatchSingleFileResult,
+  ApiComputo,
 } from "@/types/api";
 import { getAccessToken } from "./auth-storage";
 import { toast } from "sonner";
@@ -442,12 +444,13 @@ export const api = {
     params: {
       file: File;
       impresa: string;
-      roundMode: "new" | "replace";
-      roundNumber?: number;
+      mode?: "mc" | "lc";
+      roundMode: "auto" | "new" | "replace";
+      roundNumber?: number | null;
       sheetName: string;
       codeColumns: string[];
       descriptionColumns: string[];
-      priceColumn: string;
+      priceColumn?: string;
       quantityColumn?: string;
       progressColumn?: string;
     },
@@ -478,7 +481,12 @@ export const api = {
     if (descriptionColumns?.length) {
       formData.append("description_columns", JSON.stringify(descriptionColumns));
     }
-    formData.append("price_column", priceColumn);
+    if (params.mode) {
+      formData.append("mode", params.mode);
+    }
+    if (priceColumn) {
+      formData.append("price_column", priceColumn);
+    }
     if (quantityColumn) {
       formData.append("quantity_column", quantityColumn);
     }
@@ -495,9 +503,10 @@ export const api = {
     commessaId: number | string,
     params: {
       file: File;
+      mode?: "mc" | "lc";
       impreseConfig: {
         nome_impresa: string;
-        colonna_prezzo: string;
+        colonna_prezzo?: string;
         colonna_quantita?: string | null;
         round_number?: number | null;
         round_mode?: "auto" | "new" | "replace";
@@ -511,6 +520,9 @@ export const api = {
     const formData = new FormData();
     formData.append("file", params.file);
     formData.append("imprese_config", JSON.stringify(params.impreseConfig));
+    if (params.mode) {
+      formData.append("mode", params.mode);
+    }
     if (params.sheetName) {
       formData.append("sheet_name", params.sheetName);
     }
@@ -660,10 +672,11 @@ export const api = {
   },
 
   async deleteImportConfig(configId: number | string): Promise<void> {
-    await apiFetch<void>(`/import-configs/${configId}`, {
-      method: "DELETE",
-    });
-  },
+  await apiFetch<void>(`/import-configs/${configId}`, {
+    method: "DELETE",
+  });
+},
+
 
   async updateSettings(payload: {
     delta_minimo_critico?: number;

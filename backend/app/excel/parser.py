@@ -46,7 +46,13 @@ class ParsedComputo:
     voci: list[ParsedVoce]
 
 
-def parse_computo_excel(path: Path, sheet_name: str | None = None) -> ParsedComputo:
+def parse_computo_excel(
+    path: Path,
+    sheet_name: str | None = None,
+    *,
+    price_column: str | None = None,
+    quantity_column: str | None = None,
+) -> ParsedComputo:
     workbook = load_workbook(path, data_only=True)
     sheet = _pick_sheet(workbook, sheet_name or "")
     if sheet is None:
@@ -57,7 +63,7 @@ def parse_computo_excel(path: Path, sheet_name: str | None = None) -> ParsedComp
 
     if _is_lista_lavorazioni(rows):
         return _parse_lista_lavorazioni(ws.title, rows)
-    return _parse_computo_estimativo(ws.title, rows)
+    return _parse_computo_estimativo(ws.title, rows, price_column=price_column, quantity_column=quantity_column)
 
 
 # ---------------------------------------------------------------------------
@@ -65,14 +71,95 @@ def parse_computo_excel(path: Path, sheet_name: str | None = None) -> ParsedComp
 # ---------------------------------------------------------------------------
 
 
-def _parse_computo_estimativo(titolo: str | None, rows: list[list]) -> ParsedComputo:
+def _parse_computo_estimativo(
+    titolo: str | None,
+    rows: list[list],
+    *,
+    price_column: str | None = None,
+    quantity_column: str | None = None,
+) -> ParsedComputo:
     header_row = _find_header_row(rows)
     if header_row is None:
         raise ValueError("Intestazione del computo non riconosciuta: impossibile individuare le colonne principali")
 
+    # Mappa colonne dinamicamente (supporta esportazioni con progressivo in colonna 0)
+    normalized_header = [_normalize_header(cell) for cell in rows[header_row]]
+
+    def _find_col(candidates: set[str]) -> int | None:
+        for idx, value in enumerate(normalized_header):
+            if not value:
+                continue
+            tokens = set(value.split())
+            if candidates & tokens:
+                return idx
+        return None
+
+    progressivo_idx = _find_col({"progressivo", "n", "n.", "num"})
+    if progressivo_idx is None:
+        progressivo_idx = 1
+    codice_idx = _find_col({"codice", "cod"})
+    if codice_idx is None:
+        codice_idx = 2
+    descr_idx = _find_col({"descrizione", "indicazione"})
+    if descr_idx is None:
+        descr_idx = 3
+    unita_idx = _find_col({"u.m.", "um", "unita", "unità"})
+    if unita_idx is None:
+        unita_idx = 4
+    quantita_idx = None
+    normalized_quantity = _normalize_header(quantity_column) if quantity_column else None
+    for idx, value in enumerate(normalized_header):
+        if normalized_quantity and value == normalized_quantity:
+            quantita_idx = idx
+            break
+        if value and (value.replace(" ", "").startswith("quant") or value in {"qta", "qt", "q"}):
+            quantita_idx = idx
+            if not normalized_quantity:
+                break
+    if quantita_idx is None:
+        quantita_idx = 9
+
+    def _find_prezzocol(predicate) -> int | None:
+        for idx, value in enumerate(normalized_header):
+            if value and predicate(value):
+                return idx
+        return None
+
+    normalized_price = _normalize_header(price_column) if price_column else None
+    prezzo_idx = None
+    if normalized_price:
+        prezzo_idx = _find_prezzocol(lambda v: v == normalized_price)
+    if prezzo_idx is None:
+        prezzo_idx = _find_prezzocol(lambda v: "prezzo" in v and "importo" not in v) or 10
+    importo_idx = _find_prezzocol(lambda v: "importo" in v or v.endswith("totale")) or 11
+
     current_wbs: list[ParsedWbsLevel | None] = [None] * MAX_WBS_LEVELS
     voci: list[ParsedVoce] = []
     ordine = 0
+
+    def _row_is_item(row) -> bool:
+        prog = row[progressivo_idx] if len(row) > progressivo_idx else None
+        code = row[codice_idx] if len(row) > codice_idx else None
+        descr = row[descr_idx] if len(row) > descr_idx else None
+        if prog in (None, "", " "):
+            return False
+        return bool(code or descr)
+
+    def _row_is_section(row) -> bool:
+        prog = row[progressivo_idx] if len(row) > progressivo_idx else None
+        code = row[codice_idx] if len(row) > codice_idx else None
+        descr = row[descr_idx] if len(row) > descr_idx else None
+        if prog not in (None, "", " "):
+            return False
+        if not code or not descr:
+            return False
+        value = str(descr).strip().lower()
+        return value != "totale"
+
+    def _row_is_total(row) -> bool:
+        target_descr = row[descr_idx] if len(row) > descr_idx else (row[codice_idx] if len(row) > codice_idx else None)
+        value = str(target_descr).strip().lower() if target_descr else ""
+        return value == "totale"
 
     i = header_row + 1
     while i < len(rows):
@@ -81,11 +168,11 @@ def _parse_computo_estimativo(titolo: str | None, rows: list[list]) -> ParsedCom
             i += 1
             continue
 
-        if _is_total_row(row):
+        if _row_is_total(row):
             i += 1
             continue
 
-        if _is_section_row(row):
+        if _row_is_section(row):
             code = _sanitize_code(row[2])
             description = _extract_description(row[3], code)
             level = _guess_wbs_level(code, current_wbs)
@@ -98,13 +185,13 @@ def _parse_computo_estimativo(titolo: str | None, rows: list[list]) -> ParsedCom
             i += 1
             continue
 
-        if not _is_item_row(row):
+        if not _row_is_item(row):
             i += 1
             continue
 
-        progressivo = _to_int(row[1])
-        codice = _sanitize_code(row[2])
-        descrizione = _sanitize_text(row[3])
+        progressivo = _to_int(row[progressivo_idx] if len(row) > progressivo_idx else None)
+        codice = _sanitize_code(row[codice_idx] if len(row) > codice_idx else None)
+        descrizione = _sanitize_text(row[descr_idx] if len(row) > descr_idx else None)
         if not codice:
             codice = _generate_fallback_code(progressivo, descrizione, ordine)
 
@@ -115,7 +202,50 @@ def _parse_computo_estimativo(titolo: str | None, rows: list[list]) -> ParsedCom
             importo,
             note,
             rows_consumed,
-        ) = _collect_measure_rows(rows, i + 1)
+        ) = _collect_measure_rows(
+            rows,
+            i + 1,
+            quantita_idx=quantita_idx,
+            prezzo_idx=prezzo_idx,
+            importo_idx=importo_idx,
+            unita_idx=unita_idx,
+        )
+
+        if prezzo_unitario is None:
+            # Fallback: cerca prezzo nelle righe successive (es. colonne PU specifiche)
+            for look_ahead in range(1, 4):
+                if i + look_ahead >= len(rows):
+                    break
+                candidate_row = rows[i + look_ahead]
+                prezzo_unitario = _to_float(
+                    candidate_row[prezzo_idx] if len(candidate_row) > prezzo_idx else None,
+                    decimals=4,
+                )
+                if prezzo_unitario is not None:
+                    break
+        if importo is None:
+            for look_ahead in range(1, 4):
+                if i + look_ahead >= len(rows):
+                    break
+                candidate_row = rows[i + look_ahead]
+                importo = _to_float(
+                    candidate_row[importo_idx] if len(candidate_row) > importo_idx else None,
+                    decimals=2,
+                )
+                if importo is not None:
+                    break
+
+        # Se la riga principale contiene già quantità/prezzo/importo, usali (formato "schiacciato")
+        if quantita in (None,) and len(row) > quantita_idx:
+            quantita = _to_float(row[quantita_idx], decimals=2)
+        if prezzo_unitario is None and len(row) > prezzo_idx:
+            prezzo_unitario = _to_float(row[prezzo_idx], decimals=4)
+        if importo is None and len(row) > importo_idx:
+            importo = _to_float(row[importo_idx], decimals=2)
+        if importo is None and prezzo_unitario is not None and quantita not in (None, 0):
+            importo = round(prezzo_unitario * quantita, 2)
+        if prezzo_unitario is None and importo is not None and quantita not in (None, 0):
+            prezzo_unitario = round(importo / quantita, 4)
 
         # Controlla se è una riga "Totale" (il valore prezzo è l'importo totale del gruppo)
         is_totale_row = descrizione and "totale" in descrizione.lower()
@@ -165,13 +295,13 @@ def _parse_computo_estimativo(titolo: str | None, rows: list[list]) -> ParsedCom
                 quantita=quantita,
                 prezzo_unitario=prezzo_unitario,
                 importo=importo,
-                note=note,
-                metadata={
-                    "source": "excel",
-                    "parser": "computo_estimativo",
-                    "sheet_title": titolo,
-                },
-            )
+            note=note,
+            metadata={
+                "source": "excel",
+                "parser": "computo_estimativo",
+                "sheet_title": titolo,
+            },
+        )
         )
 
         ordine += 1
@@ -624,6 +754,14 @@ def _guess_wbs_level(code: str | None, current: Sequence[ParsedWbsLevel | None])
 def _collect_measure_rows(
     rows: list[list],
     start_index: int,
+    *,
+    quantita_idx: int = 9,
+    prezzo_idx: int = 10,
+    importo_idx: int = 11,
+    unita_idx: int | None = None,
+    progressivo_idx: int = 1,
+    codice_idx: int = 2,
+    descr_idx: int = 3,
 ) -> tuple[str | None, float | None, float | None, float | None, str | None, int]:
     unita: str | None = None
     quantita_total: float | None = None
@@ -638,10 +776,15 @@ def _collect_measure_rows(
             rows_consumed += 1
             continue
 
-        if _is_item_row(current) or _is_section_row(current):
+        prog = current[progressivo_idx] if len(current) > progressivo_idx else None
+        code = current[codice_idx] if len(current) > codice_idx else None
+        descr = current[descr_idx] if len(current) > descr_idx else None
+        if (prog not in (None, "", " ") and (code or descr)) or (
+            prog in (None, "", " ") and code and descr and str(descr).strip().lower() != "totale"
+        ):
             break
 
-        raw_descr = current[3] if len(current) > 3 else None
+        raw_descr = current[descr_idx] if len(current) > descr_idx else None
         normalized_descr = (
             str(raw_descr).strip().lower() if raw_descr is not None else ""
         )
@@ -663,21 +806,28 @@ def _collect_measure_rows(
         sign = -1 if detrazione else 1
         is_total_row = value_descr.startswith("totale")
 
-        unita_candidate = _sanitize_text(current[4])
+        unita_candidate = _sanitize_text(current[unita_idx]) if unita_idx is not None and len(current) > unita_idx else _sanitize_text(current[4] if len(current) > 4 else None)
         if unita_candidate:
             unita = unita_candidate
 
-        quantita_candidate = _to_float(current[9], decimals=2)
+        quantita_candidate = _to_float(current[quantita_idx] if len(current) > quantita_idx else None, decimals=2)
         if quantita_candidate is not None:
-            quantita_total = (quantita_total or 0.0) + sign * quantita_candidate
+            # Usa l'ultimo valore non-None invece di sommare (evita doppio conteggio se la riga Totale ripete la quantità)
+            quantita_total = sign * quantita_candidate
 
-        prezzo_candidate = _to_float(current[10], decimals=4)
+        prezzo_candidate = _to_float(current[prezzo_idx] if len(current) > prezzo_idx else None, decimals=4)
+        if prezzo_candidate is None and len(current) > prezzo_idx:
+            # Cerca un prezzo nelle colonne successive (es. PU per impresa specifica)
+            for alt_idx in range(prezzo_idx + 1, min(len(current), importo_idx)):
+                prezzo_candidate = _to_float(current[alt_idx], decimals=4)
+                if prezzo_candidate is not None:
+                    break
         if prezzo_candidate is not None:
             prezzo = prezzo_candidate
 
-        importo_candidate = _to_float(current[11], decimals=2)
+        importo_candidate = _to_float(current[importo_idx] if len(current) > importo_idx else None, decimals=2)
         if importo_candidate is not None:
-            importo_total = (importo_total or 0.0) + sign * importo_candidate
+            importo_total = sign * importo_candidate
 
         if len(current) > 12:
             note_candidate = _sanitize_text(current[12])

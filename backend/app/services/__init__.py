@@ -18,6 +18,8 @@ from .six_import_service import (
     six_import_service,
 )
 from .storage import storage_service
+from . import serialization_service
+from . import catalog_search_service
 from .nlp import (
     DocumentFaissPipeline,
     SemanticEmbeddingService,
@@ -61,6 +63,8 @@ __all__ = [
     "PropertyExtractor",
     "property_extractor_service",
     "storage_service",
+    "serialization_service",
+    "catalog_search_service",
     "WbsImportService",
     "WbsVisibilityService",
     "record_audit_log",

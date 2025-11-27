@@ -32,7 +32,7 @@ from app.services.importers.common import (
     _ceil_quantity,
     sanitize_impresa_label,
 )
-from app.services.importers.parser import _parse_custom_return_excel
+from app.services.importers.lc_parser import parse_lc_return_excel
 from app.services.importers.matching import (
     _align_return_rows,
     _build_description_price_map,
@@ -130,6 +130,7 @@ class LcImportService(BaseImportService):
             computo=computo,
             impresa_label=impresa,
             parsed_voci=raw_entries,
+            progetto_voci=progetto_voci,
             collect_summary=True,
         )
         if not summary or summary["price_items_total"] == 0:
@@ -197,6 +198,8 @@ class LcImportService(BaseImportService):
         sheet_price_column: str | None = None,
         sheet_quantity_column: str | None = None,
         sheet_progressive_column: str | None = None,
+        mode: str | None = None,
+        progetto_voci_override: Sequence[VoceComputo] | None = None,
     ) -> Computo:
         """
         Importa un ritorno di gara (autodetect LC o MC mode).
@@ -232,6 +235,10 @@ class LcImportService(BaseImportService):
         if not commessa:
             raise ValueError("Commessa non trovata")
 
+        resolved_mode = (mode or "").strip().lower()
+        if resolved_mode and resolved_mode not in {"lc", "mc"}:
+            raise ValueError("Modalità import non valida. Usa 'lc' oppure 'mc'.")
+
         # Recupera computo metrico base (MC) della commessa
         computo_metrico_base = session.exec(
             select(Computo)
@@ -249,16 +256,19 @@ class LcImportService(BaseImportService):
         impresa = sanitize_impresa_label(impresa)
         impresa_entry = self._get_or_create_impresa(session, impresa)
 
-        # Recupera voci del computo metrico base per confronto
-        mc_base_voci = session.exec(
-            select(VoceComputo)
-            .where(VoceComputo.computo_id == computo_metrico_base.id)
-            .order_by(VoceComputo.ordine)
-        ).all()
-        if not mc_base_voci:
-            raise ValueError(
-                "Il computo metrico (MC) non contiene voci importabili"
-            )
+        # Recupera voci del computo metrico base per confronto (riusabili fra imprese)
+        if progetto_voci_override is not None:
+            mc_base_voci = list(progetto_voci_override)
+        else:
+            mc_base_voci = session.exec(
+                select(VoceComputo)
+                .where(VoceComputo.computo_id == computo_metrico_base.id)
+                .order_by(VoceComputo.ordine)
+            ).all()
+            if not mc_base_voci:
+                raise ValueError(
+                    "Il computo metrico (MC) non contiene voci importabili"
+                )
 
         existing_ritorni = session.exec(
             select(Computo)
@@ -311,9 +321,12 @@ class LcImportService(BaseImportService):
                     "Scegli la modalità di aggiornamento oppure seleziona un round diverso."
                 )
 
-        lc_mode = bool(sheet_price_column)
+        if resolved_mode:
+            lc_mode = resolved_mode == "lc"
+        else:
+            lc_mode = bool(sheet_price_column)
         if lc_mode:
-            parse_result = _parse_custom_return_excel(
+            parse_result = parse_lc_return_excel(
                 file,
                 sheet_name,
                 sheet_code_columns or [],
@@ -328,7 +341,7 @@ class LcImportService(BaseImportService):
                 commessa=commessa,
                 parser_result=parser_result,
                 column_warnings=parse_result.column_warnings,
-                progetto_voci=mc_base_voci,
+                progetto_voci=None,  # in LC il progressivo non è previsto
                 impresa=impresa,
                 impresa_id=impresa_entry.id if impresa_entry else None,
                 file=file,
@@ -337,7 +350,12 @@ class LcImportService(BaseImportService):
                 target_computo=target_computo,
             )
 
-        parser_result = parse_computo_excel(file, sheet_name=sheet_name)
+        parser_result = parse_computo_excel(
+            file,
+            sheet_name=sheet_name,
+            price_column=sheet_price_column,
+            quantity_column=sheet_quantity_column,
+        )
         description_price_map = _build_description_price_map(parser_result.voci)
         ritorno_con_progressivi = _has_progressivi(parser_result.voci)
         mc_quantita_totale = _sum_project_quantities(mc_base_voci)
@@ -593,6 +611,7 @@ class LcImportService(BaseImportService):
             computo=computo,
             impresa_label=impresa,
             parsed_voci=voci_allineate,
+            progetto_voci=mc_base_voci,
         )
         session.commit()
         session.refresh(computo)
@@ -615,6 +634,7 @@ class LcImportService(BaseImportService):
         sheet_code_columns: Sequence[str] | None = None,
         sheet_description_columns: Sequence[str] | None = None,
         sheet_progressive_column: str | None = None,
+        mode: str | None = None,
     ) -> dict[str, Any]:
         """
         Import batch da singolo file Excel con colonne multiple per imprese diverse.
@@ -685,6 +705,10 @@ class LcImportService(BaseImportService):
         if not imprese_config:
             raise ValueError("imprese_config non può essere vuota")
 
+        resolved_mode = (mode or "").strip().lower()
+        if resolved_mode and resolved_mode not in {"lc", "mc"}:
+            raise ValueError("Modalità import non valida. Usa 'lc' oppure 'mc'.")
+
         results: dict[str, Any] = {
             "success": [],
             "failed": [],
@@ -693,6 +717,25 @@ class LcImportService(BaseImportService):
             "success_count": 0,
             "failed_count": 0,
         }
+
+        # Recupera computo di progetto e relative voci una sola volta per riuso
+        progetto = session.exec(
+            select(Computo)
+            .where(
+                Computo.commessa_id == commessa_id,
+                Computo.tipo == ComputoTipo.progetto,
+            )
+            .order_by(Computo.created_at.desc())
+        ).first()
+        if not progetto:
+            raise ValueError("Carica prima un computo metrico (MC) per la commessa")
+        progetto_voci = session.exec(
+            select(VoceComputo)
+            .where(VoceComputo.computo_id == progetto.id)
+            .order_by(VoceComputo.ordine)
+        ).all()
+        if not progetto_voci:
+            raise ValueError("Il computo metrico (MC) non contiene voci importabili")
 
         for idx, config in enumerate(imprese_config):
             # Validazione configurazione
@@ -731,8 +774,11 @@ class LcImportService(BaseImportService):
                     sheet_code_columns=sheet_code_columns,
                     sheet_description_columns=sheet_description_columns,
                     sheet_progressive_column=sheet_progressive_column,
+                    mode=resolved_mode or None,
                     sheet_price_column=colonna_prezzo,
                     sheet_quantity_column=colonna_quantita,
+                    # riusa voci progetto per prestazioni/consistenza
+                    progetto_voci_override=progetto_voci,
                 )
 
                 # Commit separato per ogni impresa (importazione robusta)
@@ -875,6 +921,7 @@ class LcImportService(BaseImportService):
         *,
         persist_impresa: bool = True,
         collect_summary: bool = False,
+        progetto_voci: Sequence[VoceComputo] | None = None,
     ) -> dict[str, Any] | None:
         session.exec(
             PriceListOffer.__table__.delete().where(
@@ -900,6 +947,28 @@ class LcImportService(BaseImportService):
                 "price_items": [],
             } if collect_summary else None
 
+        # Mappa progressivo -> PriceListItem usando il computo di progetto.
+        progressivo_map: dict[int, PriceListItem] = {}
+        if progetto_voci:
+            product_index = {
+                str(item.product_id): item
+                for item in price_items
+                if item.product_id
+            }
+            for voce in progetto_voci:
+                if voce.progressivo in (None,):
+                    continue
+                metadata = voce.extra_metadata or {}
+                product_id = metadata.get("product_id")
+                if not product_id:
+                    continue
+                target_item = product_index.get(str(product_id))
+                if target_item:
+                    try:
+                        progressivo_map[int(voce.progressivo)] = target_item
+                    except (TypeError, ValueError):
+                        continue
+
         (
             code_map,
             signature_map,
@@ -915,13 +984,11 @@ class LcImportService(BaseImportService):
             else None
         )
 
-        processed_ids: set[int] = set()
         matched_item_ids: set[int] = set()
         unmatched_entries: list[ParsedVoce] = []
-        offer_models: list[PriceListOffer] = []
+        offer_models_map: dict[int, PriceListOffer] = {}
         price_map: dict[int, float] = {}
         price_records: dict[int, list[dict[str, Any]]] = defaultdict(list)
-        conflicting_price_items: dict[int, dict[str, Any]] = {}
 
         for voce in parsed_voci:
             prezzo = voce.prezzo_unitario
@@ -936,6 +1003,11 @@ class LcImportService(BaseImportService):
                 tail_signature_map,
                 embedding_map,
             )
+            if not target_item and progressivo_map and voce.progressivo not in (None,):
+                try:
+                    target_item = progressivo_map.get(int(voce.progressivo))
+                except (TypeError, ValueError):
+                    target_item = None
             if not target_item:
                 unmatched_entries.append(voce)
                 continue
@@ -945,38 +1017,14 @@ class LcImportService(BaseImportService):
             samples = price_records[target_item.id]
             samples.append({"source": source_label, "price": price_value})
 
-            existing_price = price_map.get(target_item.id)
-            if existing_price is not None and not _prices_match(existing_price, price_value):
-                conflict_entry = conflicting_price_items.setdefault(
-                    target_item.id,
-                    {
-                        "price_list_item_id": target_item.id,
-                        "item_code": target_item.item_code,
-                        "item_description": target_item.item_description,
-                        "prices": set(),
-                        "samples": list(samples),
-                    },
-                )
-                conflict_entry["prices"].add(existing_price)
-                conflict_entry["prices"].add(price_value)
-                conflict_entry["samples"] = list(samples)
-                logger.warning(
-                    "Price conflict for code %s (item %s): existing=%s, new=%s",
-                    target_item.item_code or target_item.product_id,
-                    target_item.id,
-                    existing_price,
-                    price_value,
-                )
-                continue
-
-            if target_item.id in processed_ids:
-                continue
-
-            processed_ids.add(target_item.id)
             matched_item_ids.add(target_item.id)
             price_map[target_item.id] = price_value
-            offer_models.append(
-                PriceListOffer(
+            existing_offer = offer_models_map.get(target_item.id)
+            if existing_offer:
+                existing_offer.prezzo_unitario = round(float(prezzo), 4)
+                existing_offer.quantita = voce.quantita
+            else:
+                offer_models_map[target_item.id] = PriceListOffer(
                     price_list_item_id=target_item.id,
                     commessa_id=commessa_id,
                     computo_id=computo.id,
@@ -986,15 +1034,12 @@ class LcImportService(BaseImportService):
                     prezzo_unitario=round(float(prezzo), 4),
                     quantita=voce.quantita,
                 )
-            )
 
         if unmatched_entries:
             _log_unmatched_price_entries(unmatched_entries)
-        if conflicting_price_items:
-            _log_price_conflicts(conflicting_price_items.values())
 
-        if offer_models:
-            session.add_all(offer_models)
+        if offer_models_map:
+            session.add_all(offer_models_map.values())
         if collect_summary:
             conflict_payload = [
                 {

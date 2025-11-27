@@ -11,8 +11,6 @@ import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import CommessaAnalysisPage from "./pages/commesse/analysis/CommessaAnalysisPage";
 import AnalisiAvanzate from "./pages/commesse/analysis/AnalisiAvanzate";
-import RitorniGaraBatch from "./pages/commesse/analysis/RitorniGaraBatch";
-import CommessaImportPage from "./pages/commesse/import/CommessaImportPage";
 import CommessaLayout from "./pages/commesse/layout/CommessaLayout";
 import CommessaDetail from "./pages/commesse/overview/CommessaDetail";
 import CommessaPreventivoPage from "./pages/commesse/preventivo/CommessaPreventivoPage";
@@ -29,6 +27,7 @@ import Profile from "./pages/profile/Profile";
 import Settings from "./pages/settings/Settings";
 import { AuthProvider } from "./features/auth/AuthContext";
 import { RequireAuth, RequireRole } from "./features/auth/RequireAuth";
+import UnifiedImport from "./pages/import/UnifiedImport";
 
 const queryClient = new QueryClient();
 
@@ -59,7 +58,8 @@ const App = () => (
                 <Route path="/commesse/:id/*" element={<CommessaLayout />}>
                   <Route index element={<Navigate to="overview" replace />} />
                   <Route path="overview" element={<CommessaDetail />} />
-                  <Route path="import" element={<CommessaImportPage />} />
+                  <Route path="import" element={<UnifiedImport />} />
+                  <Route path="import-unificato" element={<UnifiedImport />} />
                   <Route path="price-catalog" element={<ElencoPrezziNew />} />
                   <Route path="elenco-prezzi" element={<Navigate to="price-catalog" replace />} />
                   <Route path="preventivo" element={<CommessaPreventivoPage />} />
@@ -67,7 +67,7 @@ const App = () => (
                   <Route path="analisi" element={<CommessaAnalysisPage />} />
                   <Route path="analisi/round/:roundParam" element={<CommessaAnalysisPage />} />
                   <Route path="analisi-avanzate" element={<AnalisiAvanzate />} />
-                  <Route path="ritorni-batch" element={<RitorniGaraBatch />} />
+                  <Route path="ritorni-batch" element={<UnifiedImport />} />
                   <Route path="wbs" element={<CommessaWbsSettings />} />
                   <Route path="settings" element={<CommessaSettings />} />
                 </Route>

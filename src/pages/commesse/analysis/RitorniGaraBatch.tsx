@@ -242,6 +242,7 @@ export default function RitorniGaraBatch({ inline = false }: RitorniGaraBatchPro
         descriptionColumns,
         priceColumn,
         quantityColumn,
+        mode: "lc" as const,
       };
     },
     [importConfigs, isValidId, commessaId],
@@ -282,6 +283,7 @@ export default function RitorniGaraBatch({ inline = false }: RitorniGaraBatchPro
           descriptionColumns: payload.descriptionColumns,
           priceColumn: payload.priceColumn,
           quantityColumn: payload.quantityColumn,
+          mode: payload.mode,
         });
 
         setRows((prev) =>

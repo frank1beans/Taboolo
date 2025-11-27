@@ -27,6 +27,8 @@ def _parse_custom_return_excel(
     price_column: str,
     quantity_column: str | None = None,
     progressive_column: str | None = None,
+    *,
+    combine_totals: bool = True,
 ) -> ParsedComputo:
     workbook = load_workbook(filename=file_path, data_only=True, read_only=True)
     try:
@@ -195,6 +197,12 @@ def _parse_custom_return_excel(
         if not is_totale_row and not codice and progressivo_value is None and not has_price:
             if descrizione:
                 last_desc = descrizione
+            continue
+
+        # SKIP righe intermedie con solo quantità (senza prezzo, senza "Totale")
+        # Queste righe sono dettagli parziali che precedono la riga "Totale" finale
+        if not is_totale_row and not has_price and quantita is not None:
+            # Mantieni il contesto ma non creare una voce
             continue
 
         # Gestione riga "Totale": usa codice/descrizione dell'header precedente,

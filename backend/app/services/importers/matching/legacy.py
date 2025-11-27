@@ -422,11 +422,19 @@ def _align_return_rows(
     if has_progressivi:
         project_buckets = _build_project_description_buckets(progetto_voci)
         _assign_wrapper_preferences(ritorno_wrappers, project_buckets)
-        return _align_progressive_return(
+        progressive_result = _align_progressive_return(
             progetto_voci,
             indice_ritorno,
             ritorno_wrappers,
         )
+        if progressive_result.matched_count == 0:
+            # Fallback: progressivi non compatibili, prova match per descrizione/WBS
+            return _align_description_only_return(
+                progetto_voci,
+                ritorno_voci,
+                description_price_map,
+            )
+        return progressive_result
     return _align_description_only_return(
         progetto_voci,
         ritorno_voci,
@@ -1502,7 +1510,7 @@ def _quantities_match(
 
 
 def _prices_match(
-    first_value: float | None, second_value: float | None, tolerance: float = 1e-4
+    first_value: float | None, second_value: float | None, tolerance: float = 1e-2
 ) -> bool:
     if first_value in (None,) or second_value in (None,):
         return True
