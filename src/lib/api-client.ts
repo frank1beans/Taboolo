@@ -36,6 +36,7 @@ import {
   PropertyExtractionResult,
 } from "@/types/api";
 import { getAccessToken } from "./auth-storage";
+import { toast } from "sonner";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
@@ -108,6 +109,16 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     let message = `Request failed with status ${response.status}`;
     const contentType = response.headers.get("content-type") ?? "";
 
+    // Handle 401 Unauthorized - redirect to login
+    if (response.status === 401) {
+      toast.error("Sessione scaduta. Effettua nuovamente il login.");
+      // Small delay to show toast before redirect
+      setTimeout(() => {
+        window.location.href = "/login";
+      }, 100);
+      throw new Error("Unauthorized");
+    }
+
     if (contentType.includes("application/json")) {
       try {
         const payload: unknown = await response.json();
@@ -150,6 +161,11 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
       if (text) message = text;
     }
 
+    // Show toast notification for 4xx/5xx errors (except 401 which was already handled)
+    if (response.status >= 400) {
+      toast.error(message || "Si è verificato un errore nella richiesta");
+    }
+
     throw new Error(message);
   }
 
@@ -189,6 +205,15 @@ export const api = {
       let message = `Request failed with status ${response.status}`;
       const contentType = response.headers.get("content-type") ?? "";
 
+      // Handle 401 Unauthorized - redirect to login
+      if (response.status === 401) {
+        toast.error("Sessione scaduta. Effettua nuovamente il login.");
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 100);
+        throw new Error("Unauthorized");
+      }
+
       if (contentType.includes("application/json")) {
         try {
           const payload: unknown = await response.json();
@@ -227,6 +252,11 @@ export const api = {
       } else {
         const text = await response.text();
         if (text) message = text;
+      }
+
+      // Show toast notification for errors
+      if (response.status >= 400) {
+        toast.error(message || "Si è verificato un errore nella richiesta");
       }
 
       throw new Error(message);
