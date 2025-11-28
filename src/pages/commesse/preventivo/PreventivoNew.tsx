@@ -123,6 +123,18 @@ export default function PreventivoNew() {
   // Column definitions
   const columnDefs = useMemo<ColDef<ApiAggregatedVoce>[]>(() => {
     return [
+      // Progressivo column
+      {
+        field: "progressivo",
+        headerName: "Prog.",
+        width: 80,
+        cellClass: "font-mono text-xs text-center",
+        headerClass: "text-center font-semibold",
+        sortable: true,
+        resizable: true,
+        filter: true,
+        valueFormatter: (params) => params.value != null ? String(params.value) : "-",
+      },
       // Base columns
       {
         field: "codice",
@@ -352,7 +364,7 @@ export default function PreventivoNew() {
         enableColumnToggle={true}
         exportFileName={`preventivo-${computo.nome}`}
         getRowId={(params) =>
-          `${params.data.codice}-${params.data.wbs_6_code}-${params.data.wbs_7_code}`
+          `${params.data.progressivo ?? 'no-prog'}-${params.data.codice}-${params.data.wbs_6_code}-${params.data.wbs_7_code}`
         }
         aggregations={aggregations}
         showAggregationFooter={true}

@@ -20,7 +20,7 @@ import type { ApiWbs7Node, FrontendWbsNode } from "@/types/api";
 
 import { ConfrontoOfferteProps } from "../types";
 import { useConfrontoData } from "../hooks/useConfrontoData";
-import { useConfrontoColumns } from "../hooks/useConfrontoColumns";
+import { useConfrontoColumns } from "../hooks/useConfrontoColumns.tsx";
 import { ConfrontoGrid } from "./ConfrontoGrid";
 import { exportConfrontoToExcel } from "../excel-export";
 

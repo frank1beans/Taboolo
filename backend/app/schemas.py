@@ -386,6 +386,7 @@ class WbsPathEntrySchema(BaseModel):
 
 
 class AggregatedVoceSchema(BaseModel):
+    progressivo: Optional[int] = None
     codice: Optional[str] = None
     descrizione: Optional[str] = None
     quantita_totale: float

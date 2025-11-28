@@ -142,10 +142,12 @@ def _aggregate_voci(voci: Iterable[VoceComputo]) -> list[AggregatedVoceSchema]:
                 path_key_parts.append(f"L{level}:{code}")
 
         path_key = "|".join(path_key_parts) if path_key_parts else "root"
-        key = f"{path_key}::{voce.codice or voce.descrizione or str(voce.id)}"
+        progressivo_part = f"prog:{voce.progressivo}" if voce.progressivo is not None else "noprog"
+        key = f"{path_key}::{progressivo_part}::{voce.codice or voce.descrizione or str(voce.id)}"
         entry = bucket.get(key)
         if entry is None:
             entry = {
+                "progressivo": voce.progressivo,
                 "codice": voce.codice,
                 "descrizione": voce.descrizione,
                 "quantita": 0.0,
@@ -165,6 +167,10 @@ def _aggregate_voci(voci: Iterable[VoceComputo]) -> list[AggregatedVoceSchema]:
                 entry["wbs_7_code"] = normalized_wbs7
             if not entry.get("wbs_path"):
                 entry["wbs_path"] = path_entries
+            # Keep the minimum progressivo when aggregating
+            if voce.progressivo is not None:
+                if entry.get("progressivo") is None or voce.progressivo < entry["progressivo"]:
+                    entry["progressivo"] = voce.progressivo
 
         entry["quantita"] += voce.quantita or 0.0
         entry["importo"] += voce.importo or 0.0
@@ -181,6 +187,7 @@ def _aggregate_voci(voci: Iterable[VoceComputo]) -> list[AggregatedVoceSchema]:
 
         aggregated.append(
             AggregatedVoceSchema(
+                progressivo=entry.get("progressivo"),
                 codice=entry["codice"],
                 descrizione=entry["descrizione"],
                 quantita_totale=round(quantita, 6),

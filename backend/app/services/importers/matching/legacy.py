@@ -130,7 +130,8 @@ def _align_progressive_return(
                 quantita = quant_from_match
             elif project_quantity is not None:
                 quantita = project_quantity
-        if price_from_match is not None:
+        # MC Fix: Se il ritorno ha prezzo 0 o None, usa il prezzo del progetto come fallback
+        if price_from_match not in (None, 0, 0.0):
             prezzo_unitario = round(price_from_match, 4)
             if quantita not in (None, 0):
                 _, importo = _calculate_line_amount(quantita, prezzo_unitario)
@@ -143,12 +144,12 @@ def _align_progressive_return(
                         f"{_shorten_label(_voce_label(voce_progetto))}"
                         f" ({format(existing_price, '.4f')} vs {format(prezzo_unitario, '.4f')})"
                     )
-            elif import_from_match is not None:
-                importo = _ceil_amount(import_from_match)
-                if importo is not None and quantita not in (None, 0):
-                    prezzo_unitario = round(importo / quantita, 4)
-                else:
-                    prezzo_unitario = prezzo_unitario
+        elif import_from_match not in (None, 0, 0.0):
+            # Fallback: calcola prezzo da importo/quantità
+            importo = _ceil_amount(import_from_match)
+            if importo is not None and quantita not in (None, 0):
+                prezzo_unitario = round(importo / quantita, 4)
+        # else: mantieni prezzo_unitario del progetto (linea 84)
 
         if quantita is None and voce_progetto.quantita is not None:
             quantita = voce_progetto.quantita

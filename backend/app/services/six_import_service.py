@@ -72,6 +72,8 @@ class _ProductEntry:
     wbs7_description: str | None
     soa_category: str | None = None
     soa_description: str | None = None
+    is_parent_voice: bool = False  # True se voce="true" (voce descrittiva parent)
+    enriched_description: str | None = None  # Descrizione arricchita con parent/children
 
     def pick_price(
         self,
@@ -485,7 +487,7 @@ class SixParser:
             payload = {
                 "product_id": entry.prodotto_id,
                 "code": entry.code,
-                "description": entry.description,
+                "description": entry.enriched_description or entry.description,
                 "unit_id": entry.unit_id,
                 "unit_label": entry.unit_label,
                 "wbs6_code": entry.wbs6_code,
@@ -722,7 +724,7 @@ class SixParser:
                 ordine=len(voci),
                 progressivo=entry.progressivo,
                 codice=code,
-                descrizione=entry.product.description,
+                descrizione=entry.product.enriched_description or entry.product.description,
                 wbs_levels=entry.wbs_levels,
                 unita_misura=entry.unita,
                 quantita=quantita_float,
@@ -1394,6 +1396,8 @@ class SixParser:
             if not prodotto_id:
                 continue
             code = prodotto.attrib.get("prdId") or prodotto_id
+            # Controlla se è una voce parent (voce="true")
+            is_parent = prodotto.attrib.get("voce") == "true"
             desc_node = prodotto.find(f"{self.ns}prdDescrizione")
             desc = ""
             if desc_node is not None:
@@ -1467,8 +1471,83 @@ class SixParser:
                 wbs6_description=wbs6_desc,
                 wbs7_code=wbs7_code,
                 wbs7_description=wbs7_desc,
+                is_parent_voice=is_parent,
             )
             self.products[prodotto_id] = entry
+
+        # Arricchisci le descrizioni con parent/children
+        self._enrich_product_descriptions()
+
+    def _enrich_product_descriptions(self) -> None:
+        """
+        Arricchisce le descrizioni dei prodotti concatenando descrizioni parent e children.
+
+        Logica:
+        - Prodotti con attributo voce="true" sono parent (voci descrittive)
+        - Prodotti con codice più lungo che inizia con il codice parent sono children
+        - La descrizione arricchita è: descrizione_parent + descrizione_child
+
+        Esempio:
+        - 1C.00.700.0010 (voce="true"): "Campionamento delle fibre aerodisperse..."
+        - 1C.00.700.0010.b: "per ogni campionamento successivo al primo..."
+        → Descrizione arricchita di 1C.00.700.0010.b:
+          "Campionamento delle fibre aerodisperse... per ogni campionamento successivo al primo..."
+        """
+        # Raggruppa solo i prodotti parent (voce="true") per codice
+        parent_products: dict[str, _ProductEntry] = {}
+        for product in self.products.values():
+            if product.is_parent_voice:
+                normalized_code = self._normalize_code_for_hierarchy(product.code)
+                if normalized_code:
+                    parent_products[normalized_code] = product
+
+        # Per ogni prodotto child, trova e concatena la descrizione del parent
+        for product in self.products.values():
+            # Salta i prodotti parent (non hanno bisogno di arricchimento)
+            if product.is_parent_voice:
+                product.enriched_description = product.description
+                continue
+
+            normalized_code = self._normalize_code_for_hierarchy(product.code)
+            if not normalized_code:
+                product.enriched_description = product.description
+                continue
+
+            # Trova il parent più vicino (codice più lungo che è prefisso)
+            parent_description = None
+            parent_code_len = 0
+            for parent_code, parent_product in parent_products.items():
+                # Controlla se il parent è prefisso del codice corrente
+                # Supporta sia "A.01.001" → "A.01.001.a" che "A.01.001" → "A01001a"
+                if normalized_code.startswith(parent_code + ".") or \
+                   (normalized_code.startswith(parent_code) and len(normalized_code) > len(parent_code)):
+                    # Prendi il parent con codice più lungo (più vicino nella gerarchia)
+                    if len(parent_code) > parent_code_len:
+                        parent_description = parent_product.description
+                        parent_code_len = len(parent_code)
+
+            # Costruisci la descrizione arricchita
+            if parent_description and product.description:
+                # Concatena parent + descrizione corrente
+                enriched = f"{parent_description} {product.description}".strip()
+                product.enriched_description = enriched
+                logger.debug(
+                    "Descrizione arricchita per %s: '%s' → '%s'",
+                    product.code,
+                    product.description,
+                    enriched,
+                )
+            else:
+                # Nessun parent trovato, usa la descrizione originale
+                product.enriched_description = product.description
+
+    @staticmethod
+    def _normalize_code_for_hierarchy(code: str) -> str:
+        """Normalizza un codice prodotto per il confronto gerarchico."""
+        if not code:
+            return ""
+        # Rimuovi spazi e converti in uppercase per confronto case-insensitive
+        return code.strip().upper()
 
     def _parse_preventivi_metadata(self) -> None:
         counter = 0

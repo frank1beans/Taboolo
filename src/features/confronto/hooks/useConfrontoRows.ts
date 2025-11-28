@@ -44,10 +44,20 @@ export function useConfrontoRows({ voci, filteredImprese }: UseConfrontoRowsOpti
         normalizedOffers.set(label.trim().toLowerCase(), offerta);
       });
 
+      // Clean description text from escape sequences
+      const cleanDescription = voce.descrizione
+        ? String(voce.descrizione)
+          .replace(/\\n/g, " ")
+          .replace(/\\r/g, " ")
+          .replace(/\\t/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+        : "";
+
       const row: ConfrontoRow = {
         id: `${voce.codice}-${index}`,
         codice: voce.codice,
-        descrizione: voce.descrizione,
+        descrizione: cleanDescription,
         descrizione_estesa: voce.descrizione_estesa,
         um: voce.um,
         quantita: voce.quantita,
@@ -77,6 +87,13 @@ export function useConfrontoRows({ voci, filteredImprese }: UseConfrontoRowsOpti
 
         row[`${fieldPrefix}_importoTotale`] =
           offerta && typeof offerta.importoTotale === "number" ? offerta.importoTotale : null;
+
+        if (offerta && typeof offerta.quantita === "number") {
+          row[`${fieldPrefix}_quantita`] = offerta.quantita;
+          if (Math.abs(offerta.quantita - voce.quantita) > 0.001) {
+            row[`${fieldPrefix}_quantityMismatch`] = true;
+          }
+        }
 
         if (offerta && offerta.prezzoUnitario != null && voce.prezzoUnitarioProgetto) {
           row[`${fieldPrefix}_deltaPerc`] =

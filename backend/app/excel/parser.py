@@ -196,6 +196,12 @@ def _parse_computo_estimativo(
         if not codice:
             codice = _generate_fallback_code(progressivo, descrizione, ordine)
 
+        # Debug logging per progressivi problematici
+        import logging
+        logger = logging.getLogger(__name__)
+        if progressivo in (10, 20, 180, 220):
+            logger.info(f"[PARSER DEBUG] Progressivo {progressivo}: codice={codice}, riga={i}")
+
         (
             unita_misura,
             quantita,
@@ -211,6 +217,9 @@ def _parse_computo_estimativo(
             importo_idx=importo_idx,
             unita_idx=unita_idx,
         )
+
+        if progressivo in (10, 20, 180, 220):
+            logger.info(f"[PARSER DEBUG] Dopo _collect_measure_rows: prog={progressivo}, qta={quantita}, prezzo={prezzo_unitario}, importo={importo}, rows_consumed={rows_consumed}")
 
         if prezzo_unitario is None:
             # Fallback: cerca prezzo nelle righe successive (es. colonne PU specifiche)
@@ -251,11 +260,18 @@ def _parse_computo_estimativo(
         # Controlla se è una riga "Totale" (il valore prezzo è l'importo totale del gruppo)
         is_totale_row = descrizione and "totale" in descrizione.lower()
 
+        if progressivo in (10, 20, 180, 220):
+            logger.info(f"[PARSER DEBUG] Prima logica totale: prog={progressivo}, is_totale_row={is_totale_row}, descrizione='{descrizione}', prezzo={prezzo_unitario}, importo={importo}")
+
         # FIX: Calcolo più robusto per evitare confusione importo/prezzo
         if is_totale_row and prezzo_unitario is not None:
             # Per righe "Totale": usa il prezzo come importo totale
+            logger.warning(f"[PARSER] Voce prog={progressivo} con descrizione '{descrizione}' contiene 'totale' - interpreto prezzo come importo!")
             importo = round(prezzo_unitario, 2)
             prezzo_unitario = None
+
+        if progressivo in (10, 20, 180, 220):
+            logger.info(f"[PARSER DEBUG] Dopo logica totale: prog={progressivo}, prezzo={prezzo_unitario}, importo={importo}")
         elif (
             importo is None
             and quantita not in (None, 0)

@@ -79,11 +79,11 @@ export const resolveOfferta = (
 };
 
 export const COLOR_PALETTE = [
-  { bg: { light: "#dbeafe", dark: "#1e3a5f" }, border: { light: "#60a5fa", dark: "#3b82f6" } },
-  { bg: { light: "#fef3c7", dark: "#451a03" }, border: { light: "#fbbf24", dark: "#f59e0b" } },
-  { bg: { light: "#dcfce7", dark: "#14532d" }, border: { light: "#4ade80", dark: "#10b981" } },
-  { bg: { light: "#f3e8ff", dark: "#4c1d95" }, border: { light: "#c084fc", dark: "#a855f7" } },
-  { bg: { light: "#f1f5f9", dark: "#1e293b" }, border: { light: "#94a3b8", dark: "#64748b" } },
+  { bg: { light: "#f0f9ff", dark: "#0c4a6e" }, border: { light: "#bae6fd", dark: "#0ea5e9" } }, // Sky
+  { bg: { light: "#fffbeb", dark: "#451a03" }, border: { light: "#fde68a", dark: "#d97706" } }, // Amber
+  { bg: { light: "#f0fdf4", dark: "#14532d" }, border: { light: "#bbf7d0", dark: "#22c55e" } }, // Green
+  { bg: { light: "#faf5ff", dark: "#581c87" }, border: { light: "#e9d5ff", dark: "#a855f7" } }, // Purple
+  { bg: { light: "#f8fafc", dark: "#1e293b" }, border: { light: "#e2e8f0", dark: "#64748b" } }, // Slate
 ];
 
 export const getColorForIndex = (index: number, isDarkMode: boolean) => {

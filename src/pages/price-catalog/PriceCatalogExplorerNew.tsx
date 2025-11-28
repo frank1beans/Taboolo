@@ -201,18 +201,22 @@ export default function PriceCatalogExplorerNew() {
 
   const businessUnitOptions = useMemo(() => {
     if (!summary) return [];
-    return summary.business_units.map((bu) => ({ value: bu.value ?? "", label: bu.label }));
+    return summary.business_units
+      .map((bu) => ({ value: bu.value ?? "", label: bu.label }))
+      .filter((opt) => opt.value !== "");
   }, [summary]);
 
   const commessaOptions = useMemo(() => {
     if (!summary) return [];
-    return summary.business_units.flatMap((bu) =>
-      bu.commesse.map((c) => ({
-        value: c.commessa_id,
-        label: `${c.commessa_nome} (${c.commessa_codice})`,
-        businessUnit: bu.value ?? "",
-      })),
-    );
+    return summary.business_units
+      .flatMap((bu) =>
+        bu.commesse.map((c) => ({
+          value: c.commessa_id,
+          label: `${c.commessa_nome} (${c.commessa_codice})`,
+          businessUnit: bu.value ?? "",
+        })),
+      )
+      .filter((opt) => String(opt.value) !== "");
   }, [summary]);
 
   const filteredCommessaOptions = useMemo(() => {

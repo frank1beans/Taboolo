@@ -1,8 +1,8 @@
 from .common import BaseImportService, _WbsNormalizeContext
 from .lc_parser import parse_lc_return_excel
 from .mc_parser import parse_mc_return_excel
-from .lc import LcImportService
-from .mc import McImportService
+from .lc_import_service import LcImportService
+from .mc_import_service import McImportService
 from .matching import (
     _ReturnAlignmentResult,
     _align_return_rows,

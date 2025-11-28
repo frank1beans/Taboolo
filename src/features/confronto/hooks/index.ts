@@ -3,5 +3,5 @@
  */
 
 export { useConfrontoRows } from "./useConfrontoRows";
-export { useConfrontoColumns } from "./useConfrontoColumns";
+export { useConfrontoColumns } from "./useConfrontoColumns.tsx";
 export { useConfrontoExport } from "./useConfrontoExport";

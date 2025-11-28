@@ -5,7 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider defaultOpen={true}>
-      <div className="flex min-h-screen w-full bg-[hsl(220,18%,92%)]">
+      <div className="flex min-h-screen w-full bg-background">
         <AppSidebar />
         <SidebarInset className="flex flex-1 flex-col h-screen overflow-hidden">
           <TopBar />

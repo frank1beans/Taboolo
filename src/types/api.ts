@@ -50,6 +50,7 @@ export interface ApiWbsPathEntry {
 }
 
 export interface ApiAggregatedVoce {
+  progressivo?: number | null;
   codice?: string | null;
   descrizione?: string | null;
   quantita_totale: number;

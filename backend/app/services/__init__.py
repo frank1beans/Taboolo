@@ -9,8 +9,8 @@ from .analysis import (
 )
 from .commessa_bundle import CommessaBundleService, commessa_bundle_service
 from .commesse import CommesseService
-from .importer import ImportService, LcImportService, McImportService, import_service
-from .importers import BaseImportService
+from .importer import ImportService, import_service
+from .importers import BaseImportService, LcImportService, McImportService
 # from .insights import InsightsService  # Deprecated - moved to analysis/
 from .six_import_service import (
     PreventivoSelectionError,
