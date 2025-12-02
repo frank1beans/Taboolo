@@ -18,8 +18,18 @@ from .six_import_service import (
     six_import_service,
 )
 from .storage import storage_service
-from . import serialization_service
-from . import catalog_search_service
+
+# Lazy imports to avoid circular dependencies
+def __getattr__(name):
+    if name == "serialization_service":
+        import app.services.serialization_service as module
+        globals()[name] = module
+        return module
+    elif name == "catalog_search_service":
+        import app.services.catalog_search_service as module
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 from .nlp import (
     DocumentFaissPipeline,
     SemanticEmbeddingService,

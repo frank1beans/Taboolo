@@ -588,6 +588,7 @@ class ConfrontoVoceOffertaSchema(BaseModel):
     quantita: Optional[float] = None
     prezzo_unitario: Optional[float] = None
     importo_totale: Optional[float] = None
+    delta_quantita: Optional[float] = None
     note: Optional[str] = None
     criticita: Optional[str] = None
 

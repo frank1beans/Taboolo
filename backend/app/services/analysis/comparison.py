@@ -31,6 +31,11 @@ class ComparisonService:
                         quantita=offerta.get("quantita"),
                         prezzo_unitario=offerta.get("prezzo_unitario"),
                         importo_totale=offerta.get("importo_totale"),
+                        delta_quantita=(
+                            None
+                            if item.get("quantita") is None or offerta.get("quantita") is None
+                            else float(offerta.get("quantita")) - float(item.get("quantita"))
+                        ),
                         note=offerta.get("note"),
                         criticita=offerta.get("criticita"),
                     )

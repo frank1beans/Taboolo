@@ -7,7 +7,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from app.excel import ParsedComputo, ParsedVoce, ParsedWbsLevel
-from app.services.importers.parser import (
+from app.services.importers.parser_utils import (
     _CustomReturnParseResult,
     _apply_column_filter,
     _cell_to_float,
@@ -165,7 +165,7 @@ def _has_values(rows: list, indexes: Sequence[int]) -> bool:
 
 
 # Re-export internal helpers we rely on
-from app.services.importers.parser import _cell_has_content, _cell_to_progressive, _row_has_values  # noqa: E402,F401
+from app.services.importers.parser_utils import _cell_has_content, _cell_to_progressive, _row_has_values  # noqa: E402,F401
 
 
 def _ensure_indexes_lc(

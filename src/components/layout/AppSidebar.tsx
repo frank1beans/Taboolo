@@ -1,4 +1,4 @@
-import { Home, FolderOpen, Settings, PackageSearch, Shield, Building2, Layers3, ListChecks, FolderKanban, ChevronRight } from "lucide-react";
+import { Home, FolderOpen, Settings, PackageSearch, Building2, Layers3, ListChecks, FolderKanban, ChevronRight } from "lucide-react";
 import { NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -18,21 +18,12 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { cn } from "@/lib/utils";
 import { STATUS_CONFIG } from "@/lib/constants";
 import logo from "@/assets/logo.png";
-import { useAuth } from "@/features/auth/AuthContext";
 import { api } from "@/lib/api-client";
 import { ApiCommessa, CommessaStato } from "@/types/api";
 import { useMemo, useState } from "react";
 
-const baseItems = [
-  { title: "HOME", url: "/", icon: Home },
-  { title: "COMMESSE", url: "/commesse", icon: FolderOpen },
-  { title: "ELENCO PREZZI", url: "/elenco-prezzi", icon: PackageSearch },
-  { title: "IMPOSTAZIONI", url: "/settings", icon: Settings },
-];
-
 export function AppSidebar() {
   const { open } = useSidebar();
-  const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -73,14 +64,6 @@ export function AppSidebar() {
       badgeVariant: STATUS_CONFIG[status].badgeVariant,
     }));
   }, [commesse]);
-
-  const items = [
-    ...baseItems,
-    { title: "PROFILO", url: "/profile", icon: Settings },
-    ...(user && ["admin", "manager"].includes(user.role)
-      ? [{ title: "ADMIN", url: "/admin", icon: Shield }]
-      : []),
-  ];
 
   const handleFilterClick = (type: string, value: string | null) => {
     if (type === "root") {
@@ -349,26 +332,6 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
 
-                {/* Admin - Conditional */}
-                {user && ["admin", "manager"].includes(user.role) && (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild>
-                      <NavLink
-                        to="/admin"
-                        className={({ isActive }) =>
-                          `flex items-center gap-2 px-2 py-2 rounded transition-colors ${
-                            isActive
-                              ? "bg-primary/10 text-primary font-bold"
-                              : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                          } ${!open ? "justify-center px-0" : ""}`
-                        }
-                      >
-                        <Shield className="h-4 w-4 flex-shrink-0" />
-                        {open && <span className="text-xs font-bold tracking-wider">ADMIN</span>}
-                      </NavLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

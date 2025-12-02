@@ -153,153 +153,112 @@ def _parse_custom_return_excel(
 
     voci: list[ParsedVoce] = []
     ordine = 0
-    last_code: str | None = None
-    last_desc: str | None = None
-    last_progressivo: int | None = None
+
+    # =====================================================================
+    # LOGICA TESTA-CODA: 1 progressivo = 1 voce
+    # =====================================================================
+    # STEP 1: PULIZIA PRELIMINARE DEL DATASET
+    # Elimina:
+    # - Righe di riepilogo (es. "Totale opere generali")
+    # - Righe di titolo capitolo (codice+descrizione senza progressivo/quantità/prezzo)
+    # =====================================================================
+
+    cleaned_rows = []
     for row in data_rows:
-        formula_row = next(formula_rows_iter, ())
         if not _row_has_values(row):
             continue
+
         codice = _combine_code(row, code_indexes)
         descrizione = _combine_text(row, description_indexes)
         raw_price = _cell_to_float(row, price_index)
         quantita = _cell_to_float(row, quantity_index) if quantity_index is not None else None
         progressivo_value = _cell_to_progressive(row, progressive_index)
 
-        is_totale_row = descrizione and "totale" in descrizione.lower()
-        has_price = raw_price is not None
-
-        # Se la riga contiene solo header (codice/descrizione/progressivo) senza quantità né prezzo,
-        # memorizza il contesto e passa alla riga successiva.
-        if not has_price and quantita is None:
-            if codice or descrizione or progressivo_value is not None:
-                last_code = codice or last_code
-                last_desc = descrizione or last_desc
-                if progressivo_value is not None:
-                    last_progressivo = progressivo_value
+        # Elimina righe di riepilogo solo se davvero vuote: se contengono prezzo/quantità, servono come coda
+        if (
+            descrizione
+            and descrizione.lower().startswith("totale ")
+            and not progressivo_value
+            and raw_price is None
+            and quantita is None
+        ):
             continue
 
-        # Aggiorna il contesto corrente: le righe di descrizione/codice senza prezzo
-        # fungono da header per la successiva riga "Totale".
-        if (codice or descrizione) and not has_price and not quantita:
-            last_code = codice or last_code
-            last_desc = descrizione or last_desc
-            if progressivo_value is not None:
-                last_progressivo = progressivo_value
-
-        if (codice or progressivo_value) and not is_totale_row and not has_price:
-            last_code = codice or last_code
-            last_desc = descrizione or last_desc
-            if progressivo_value is not None:
-                last_progressivo = progressivo_value
+        # Elimina righe di titolo capitolo: hanno (codice o descrizione) ma NON progressivo/quantità/prezzo
+        if (codice or descrizione) and progressivo_value is None and quantita is None and raw_price is None:
             continue
 
-        if not is_totale_row and not codice and progressivo_value is None and not has_price:
-            if descrizione:
-                last_desc = descrizione
-            continue
+        cleaned_rows.append(row)
 
-        # SKIP righe intermedie con solo quantità (senza prezzo, senza "Totale")
-        # Queste righe sono dettagli parziali che precedono la riga "Totale" finale
-        if not is_totale_row and not has_price and quantita is not None:
-            # Mantieni il contesto ma non creare una voce
-            continue
+    # =====================================================================
+    # STEP 2: IDENTIFICA PROGRESSIVI (TESTE)
+    # =====================================================================
+    progressivo_indexes = []
+    for idx, row in enumerate(cleaned_rows):
+        progressivo_value = _cell_to_progressive(row, progressive_index)
+        if progressivo_value is not None:
+            progressivo_indexes.append((idx, progressivo_value, row))
 
-        # Gestione riga "Totale": usa codice/descrizione dell'header precedente,
-        # ma prendi quantita/prezzo dalla riga totale.
-        if is_totale_row and (quantita is not None or raw_price is not None):
-            source_code = codice or last_code
-            source_desc = last_desc or codice or "Voce senza descrizione"
-            source_progressivo = progressivo_value or last_progressivo
-            if source_progressivo is None:
-                continue
-            prezzo_value = _sanitize_price_candidate(raw_price) if raw_price is not None else None
-            quantita_value = quantita if quantita not in (None,) else None
-            importo_value = None
-            if prezzo_value is not None and quantita_value is not None:
-                _, importo_value = _calculate_line_amount(quantita_value, round(prezzo_value, 4))
-                prezzo_value = round(prezzo_value, 4)
-            elif raw_price is not None:
-                importo_value = _ceil_amount(raw_price)
-
-            wbs_levels: list[ParsedWbsLevel] = []
-            normalized_code_value = _normalize_wbs7_code(source_code)
-            if _looks_like_wbs7_code(normalized_code_value):
-                wbs_levels.append(
-                    ParsedWbsLevel(
-                        level=7,
-                        code=normalized_code_value,
-                        description=source_desc,
-                    )
-                )
-            voci.append(
-                ParsedVoce(
-                    ordine=ordine,
-                    progressivo=source_progressivo,
-                    codice=source_code,
-                    descrizione=source_desc,
-                    wbs_levels=wbs_levels,
-                    unita_misura=None,
-                    quantita=quantita_value,
-                    prezzo_unitario=prezzo_value,
-                    importo=importo_value,
-                    note=None,
-                    metadata=None,
-                )
-            )
-            ordine += 1
-            last_code = None
-            last_desc = None
-            last_progressivo = None
-            # Non azzero last_code/last_desc per consentire utilizzo in mancanza di header successivo
-            continue
-
-        if not codice and last_code:
-            codice = last_code
-        if not descrizione and last_desc:
-            descrizione = last_desc
-        if raw_price is None:
-            raw_price = 0.0
-        if not codice and not descrizione and progressivo_value is None:
-            continue
-        if raw_price is None and quantita is None:
-            continue
-        if not codice and progressivo_value is not None:
-            codice = f"PROG-{progressivo_value:05d}"
-        if not descrizione and progressivo_value is not None:
-            descrizione = f"Voce progressivo {progressivo_value}"
-        last_code = None
-        last_desc = None
-        formula_cell = (
-            formula_row[price_index] if price_index < len(formula_row) else None
-        )
-        if _has_external_formula(formula_cell):
-            raise ValueError(
-                "La colonna prezzo contiene formule collegate a file esterni. Apri il file in Excel e incolla i valori numerici prima di importare."
-            )
-        if quantity_index is not None and quantity_index < len(formula_row):
-            quantity_formula_cell = formula_row[quantity_index]
+    # =====================================================================
+    # STEP 3: COSTRUISCI BLOCCHI E CREA VOCI
+    # =====================================================================
+    for i, (testa_idx, progressivo, testa_row) in enumerate(progressivo_indexes):
+        # Determina fine blocco
+        if i + 1 < len(progressivo_indexes):
+            fine_blocco_idx = progressivo_indexes[i + 1][0]
         else:
-            quantity_formula_cell = None
-        if quantity_index is not None and _has_external_formula(quantity_formula_cell):
-            raise ValueError(
-                "La colonna quantit�� contiene formule collegate a file esterni. Incolla i valori numerici prima dell'import."
-            )
-        prezzo = _sanitize_price_candidate(raw_price)
-        if prezzo is None:
+            fine_blocco_idx = len(cleaned_rows)
+
+        blocco = cleaned_rows[testa_idx:fine_blocco_idx]
+
+        # Trova la riga di coda: usa l'ultima riga con PREZZO (qty e prezzo dalla stessa riga).
+        coda_row = None
+        for row in reversed(blocco):
+            price_val = _cell_to_float(row, price_index)
+            if price_val is not None:
+                coda_row = row
+                break
+        # Se nessuna riga ha prezzo, fallback all'ultima con qty o prezzo, ma scarta i riepiloghi senza prezzo
+        if coda_row is None:
+            for row in reversed(blocco):
+                qty_val = _cell_to_float(row, quantity_index) if quantity_index is not None else None
+                price_val = _cell_to_float(row, price_index)
+                descr = _combine_text(row, description_indexes) or ""
+                descr_norm = descr.strip().lower()
+                if price_val is None and descr_norm.startswith(("totale", "a sommare")):
+                    continue
+                if qty_val is not None or price_val is not None:
+                    coda_row = row
+                    break
+
+        if coda_row is None:
             continue
-        if is_totale_row:
-            quantita_value = quantita if quantita not in (None,) else None
-            prezzo_value: float | None = None
-            importo_value = _ceil_amount(prezzo)
-        else:
-            quantita_value = quantita if quantita not in (None,) else None
-            prezzo_value = round(prezzo, 4)
-            _, importo_value = _calculate_line_amount(quantita_value, prezzo_value)
-        voce_descrizione = descrizione or codice or "Voce senza descrizione"
-        effective_progressivo = progressivo_value or last_progressivo
-        if effective_progressivo is None:
-            continue
+
+        # Dalla TESTA: codice, descrizione
+        codice = _combine_code(testa_row, code_indexes)
+        descrizione = _combine_text(testa_row, description_indexes)
+
+        # Dalla CODA: quantità, prezzo
+        quantita = _cell_to_float(coda_row, quantity_index) if quantity_index is not None else None
+        raw_price = _cell_to_float(coda_row, price_index)
+
+        # Prezzo e importo
+        prezzo_value = _sanitize_price_candidate(raw_price) if raw_price is not None else None
+        # Fallback: se la coda è un totale riepilogativo senza prezzo, prova la TESTA
+        if prezzo_value is None:
+            head_price = _cell_to_float(testa_row, price_index)
+            if head_price is not None:
+                prezzo_value = _sanitize_price_candidate(head_price)
+
+        importo_value = None
+        if prezzo_value is not None and quantita is not None:
+            prezzo_rounded = round(prezzo_value, 4)
+            _, importo_value = _calculate_line_amount(quantita, prezzo_rounded)
+            prezzo_value = prezzo_rounded
+
+        voce_descrizione = descrizione or codice or f"Voce progressivo {progressivo}"
+
+        # WBS levels
         wbs_levels: list[ParsedWbsLevel] = []
         normalized_code_value = _normalize_wbs7_code(codice)
         if _looks_like_wbs7_code(normalized_code_value):
@@ -310,15 +269,16 @@ def _parse_custom_return_excel(
                     description=voce_descrizione,
                 )
             )
+
         voci.append(
             ParsedVoce(
                 ordine=ordine,
-                progressivo=effective_progressivo,
+                progressivo=progressivo,
                 codice=codice,
                 descrizione=voce_descrizione,
                 wbs_levels=wbs_levels,
                 unita_misura=None,
-                quantita=quantita_value,
+                quantita=quantita,
                 prezzo_unitario=prezzo_value,
                 importo=importo_value,
                 note=None,
@@ -675,8 +635,24 @@ def _cell_to_float(row, index: int) -> float | None:
     text = str(value).strip()
     if not text:
         return None
-    text = text.replace(",", ".")
-    text = text.replace(" ", "")
+
+    # Normalizza valori in formato "1.234,56" o "€ 1.234,56"
+    text = text.replace("€", "").replace("\u00a0", "").replace(" ", "")
+    if "," in text and "." in text:
+        # Se l'ultimo separatore è la virgola, considerala decimale e rimuovi i separatori migliaia con punto
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "")
+            text = text.replace(",", ".")
+        else:
+            # Caso raro con punto decimale e virgola migliaia
+            text = text.replace(",", "")
+    else:
+        text = text.replace(",", ".")
+
+    # Rimuove eventuali caratteri residui non numerici (es. '+', '%')
+    text = re.sub(r"[^0-9.+-]", "", text)
+    if not text:
+        return None
     try:
         return float(text)
     except ValueError:
@@ -697,9 +673,12 @@ def _cell_to_progressive(row, index: int | None) -> int | None:
     text = str(value).strip()
     if not text:
         return None
-    text = text.replace(",", ".")
+    # Rimuove separatori migliaia e caratteri non numerici (es. "6.580" -> "6580")
+    normalized = re.sub(r"[^0-9+-]", "", text.replace(",", ""))
+    if not normalized:
+        return None
     try:
-        return int(float(text))
+        return int(normalized)
     except ValueError:
         return None
 

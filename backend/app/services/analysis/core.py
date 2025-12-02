@@ -187,7 +187,7 @@ class CoreAnalysisService:
                     continue
                 code = CoreAnalysisService._resolve_primary_code(voce, wbs_info)
                 raw_descrizione = CoreAnalysisService._resolve_primary_description(voce, wbs_info)
-                descrizione = CoreAnalysisService._canonical_description(raw_descrizione)
+                descrizione = CoreAnalysisService._display_description(raw_descrizione)
                 voce_norm = legacy_to_normalized.get(voce.id)
                 price_item_id = voce_norm.price_list_item_id if voce_norm else None
                 project_offer = (
@@ -252,7 +252,7 @@ class CoreAnalysisService:
                     continue
                 code = CoreAnalysisService._resolve_primary_code(voce, wbs_info)
                 raw_descrizione = CoreAnalysisService._resolve_primary_description(voce, wbs_info)
-                descrizione = CoreAnalysisService._canonical_description(raw_descrizione)
+                descrizione = CoreAnalysisService._display_description(raw_descrizione)
                 voce_norm = legacy_to_normalized.get(voce.id)
                 price_item_id = voce_norm.price_list_item_id if voce_norm else None
                 entry_idx = CoreAnalysisService._find_entry(index_map, voce, code, wbs_info)
@@ -788,6 +788,19 @@ class CoreAnalysisService:
     def _normalize_text(value: str) -> str:
         normalized = unicodedata.normalize("NFKD", value)
         return "".join(ch.lower() for ch in normalized if ch.isalnum())
+
+    @staticmethod
+    def _display_description(value: str | None) -> str | None:
+        """
+        Descrizione per la UI: preserva il testo intero, pulendo CR/LF e token _x000D_ senza troncare.
+        """
+        if not value:
+            return None
+        text = value.replace("_x000D_", "\n").replace("\r", "\n")
+        # Collassa più newline in uno spazio
+        parts = [part.strip() for part in text.split("\n") if part and part.strip()]
+        cleaned = " ".join(parts).strip()
+        return cleaned or value.strip()
 
     @staticmethod
     def _canonical_description(value: str | None) -> str | None:

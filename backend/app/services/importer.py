@@ -6,8 +6,7 @@ from typing import Sequence
 from sqlmodel import Session
 
 from app.db.models import Computo, VoceComputo
-from app.services.importers.lc_import_service import LcImportService
-from app.services.importers.mc_import_service import McImportService
+from app.services.importers import LcImportService, McImportService
 
 
 class ImportService:
@@ -310,6 +309,71 @@ class ImportService:
         )
 
         return results
+
+    # ------------------------------------------------------------------
+    # Manual adjustments helpers
+    # ------------------------------------------------------------------
+    def update_manual_offer_price(
+        self,
+        *,
+        session: Session,
+        commessa_id: int,
+        computo_id: int,
+        price_list_item_id: int,
+        prezzo_unitario: float,
+        quantita: float | None = None,
+    ) -> tuple["PriceListOffer", "Computo"]:
+        """
+        Aggiorna o crea un'offerta manuale per un item di elenco prezzi su un computo specifico.
+
+        Mantiene l'unicità (price_list_item_id, computo_id) e propaga metadati d'impresa/round.
+        """
+        from datetime import datetime
+        from sqlmodel import select
+        from app.db.models import PriceListOffer, PriceListItem, Computo
+
+        computo = session.get(Computo, computo_id)
+        if not computo or computo.commessa_id != commessa_id:
+            raise ValueError("Computo non trovato per la commessa indicata")
+
+        item = session.get(PriceListItem, price_list_item_id)
+        if not item or item.commessa_id != commessa_id:
+            raise ValueError("Voce di elenco prezzi non trovata per questa commessa")
+
+        # Upsert su vincolo (price_list_item_id, computo_id)
+        existing = session.exec(
+            select(PriceListOffer).where(
+                PriceListOffer.price_list_item_id == price_list_item_id,
+                PriceListOffer.computo_id == computo_id,
+            )
+        ).first()
+
+        if existing:
+            offer = existing
+            offer.prezzo_unitario = float(prezzo_unitario)
+            offer.quantita = quantita
+            offer.updated_at = datetime.utcnow()
+        else:
+            offer = PriceListOffer(
+                price_list_item_id=price_list_item_id,
+                commessa_id=commessa_id,
+                computo_id=computo_id,
+                impresa_id=getattr(computo, "impresa_id", None),
+                impresa_label=getattr(computo, "impresa", None),
+                round_number=getattr(computo, "round_number", None),
+                prezzo_unitario=float(prezzo_unitario),
+                quantita=quantita,
+            )
+            session.add(offer)
+
+        # Aggiorna timestamp del computo per riflettere la modifica
+        computo.updated_at = datetime.utcnow()
+
+        session.add(computo)
+        session.commit()
+        session.refresh(offer)
+        session.refresh(computo)
+        return offer, computo
 
 
 import_service = ImportService()

@@ -69,6 +69,14 @@ export function useConfrontoExport({ filteredImprese }: UseConfrontoExportOption
 
       baseExportCols.push(
         {
+          header: `${headerLabel} - Quantità`,
+          field: `${fieldPrefix}_quantita`,
+          valueFormatter: (row: ConfrontoRow) => {
+            const val = row[`${fieldPrefix}_quantita`];
+            return val != null ? (val as number).toFixed(2) : "-";
+          },
+        },
+        {
           header: `${headerLabel} - P.U.`,
           field: `${fieldPrefix}_prezzoUnitario`,
           valueFormatter: (row: ConfrontoRow) => {
@@ -90,6 +98,14 @@ export function useConfrontoExport({ filteredImprese }: UseConfrontoExportOption
           valueFormatter: (row: ConfrontoRow) => {
             const val = row[`${fieldPrefix}_deltaPerc`];
             return val != null ? `${val >= 0 ? "+" : ""}${val.toFixed(2)}%` : "-";
+          },
+        },
+        {
+          header: `${headerLabel} - Δ Quantità`,
+          field: `${fieldPrefix}_deltaQuantita`,
+          valueFormatter: (row: ConfrontoRow) => {
+            const val = row[`${fieldPrefix}_deltaQuantita`];
+            return val != null ? `${val >= 0 ? "+" : ""}${val.toFixed(2)}` : "-";
           },
         },
         {

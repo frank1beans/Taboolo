@@ -130,8 +130,8 @@ def _align_progressive_return(
                 quantita = quant_from_match
             elif project_quantity is not None:
                 quantita = project_quantity
-        # MC Fix: Se il ritorno ha prezzo 0 o None, usa il prezzo del progetto come fallback
-        if price_from_match not in (None, 0, 0.0):
+        # MC Fix: Se il ritorno ha prezzo (anche 0), usalo. Solo se None, usa fallback progetto
+        if price_from_match is not None:
             prezzo_unitario = round(price_from_match, 4)
             if quantita not in (None, 0):
                 _, importo = _calculate_line_amount(quantita, prezzo_unitario)
@@ -144,8 +144,8 @@ def _align_progressive_return(
                         f"{_shorten_label(_voce_label(voce_progetto))}"
                         f" ({format(existing_price, '.4f')} vs {format(prezzo_unitario, '.4f')})"
                     )
-        elif import_from_match not in (None, 0, 0.0):
-            # Fallback: calcola prezzo da importo/quantità
+        elif import_from_match is not None:
+            # Fallback: calcola prezzo da importo/quantità (anche se importo=0)
             importo = _ceil_amount(import_from_match)
             if importo is not None and quantita not in (None, 0):
                 prezzo_unitario = round(importo / quantita, 4)
@@ -1349,7 +1349,13 @@ def _pick_match(
             continue
         for wrapper in bucket:
             base_scope = wrapper.get("base_key")
-            if base_scope and project_base_key and base_scope != project_base_key:
+            allow_cross_wbs = key.startswith("progressivo")
+            if (
+                base_scope
+                and project_base_key
+                and base_scope != project_base_key
+                and not allow_cross_wbs
+            ):
                 continue
             preferred_id = wrapper.get("preferred_voice_id")
             if (

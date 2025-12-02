@@ -6,7 +6,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { Layout } from "./components/Layout";
-import AdminArea from "./pages/admin/AdminArea";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import CommessaAnalysisPage from "./pages/commesse/analysis/CommessaAnalysisPage";
@@ -26,7 +25,7 @@ import PriceCatalogExplorerNew from "./pages/price-catalog/PriceCatalogExplorerN
 import Profile from "./pages/profile/Profile";
 import Settings from "./pages/settings/Settings";
 import { AuthProvider } from "./features/auth/AuthContext";
-import { RequireAuth, RequireRole } from "./features/auth/RequireAuth";
+import { RequireAuth } from "./features/auth/RequireAuth";
 import UnifiedImport from "./pages/import/UnifiedImport";
 
 const queryClient = new QueryClient();
@@ -74,14 +73,6 @@ const App = () => (
                 <Route path="/elenco-prezzi" element={<PriceCatalogExplorerNew />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/profile" element={<Profile />} />
-                <Route
-                  path="/admin"
-                  element={
-                    <RequireRole allowedRoles={["admin", "manager"]}>
-                      <AdminArea />
-                    </RequireRole>
-                  }
-                />
                 <Route path="/test-grafici" element={<TestGrafici />} />
               </Route>
 

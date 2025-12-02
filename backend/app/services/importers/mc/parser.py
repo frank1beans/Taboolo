@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Sequence
 
-from app.services.importers.parser import _parse_custom_return_excel, _CustomReturnParseResult
+from app.services.importers.parser_utils import _parse_custom_return_excel, _CustomReturnParseResult
 
 
 def parse_mc_return_excel(

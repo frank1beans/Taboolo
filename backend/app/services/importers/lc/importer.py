@@ -32,7 +32,7 @@ from app.services.importers.import_common import (
     calculate_total_import,
     validate_progetto_voci,
 )
-from app.services.importers.lc_parser import parse_lc_return_excel
+from .parser import parse_lc_return_excel
 from app.services.importers.matching import (
     _build_lc_matching_report,
     _build_price_list_lookup,

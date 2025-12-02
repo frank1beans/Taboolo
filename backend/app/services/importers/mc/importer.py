@@ -21,6 +21,7 @@ from sqlmodel import Session, select
 from app.db.models import Computo, ComputoTipo, PriceListItem, PriceListOffer, VoceComputo
 from app.db.models_wbs import Impresa
 from app.excel import ParsedVoce, parse_computo_excel
+from .parser import parse_mc_return_excel
 from app.services.commesse import CommesseService
 from app.services.importers.common import (
     BaseImportService,
@@ -263,34 +264,42 @@ class McImportService(BaseImportService):
                     "Scegli la modalità di aggiornamento oppure seleziona un round diverso."
                 )
 
-        # Parse file MC
-        parser_result = parse_computo_excel(
-            file,
+        # Parse file MC (using head-tail logic: 1 progressivo = 1 voce)
+        parser_result = parse_mc_return_excel(
+            file_path=file,
             sheet_name=sheet_name,
-            price_column=sheet_price_column,
-            quantity_column=sheet_quantity_column,
+            code_columns=["CODICE"],
+            description_columns=["INDICAZIONE DEI LAVORI E DELLE PROVVISTE"],
+            price_column=sheet_price_column or "PREZZO",
+            quantity_column=sheet_quantity_column or "QUANTITA'",
+            progressive_column="N.",
         )
+
+        # Extract computo from parser result
+        ritorno_voci = parser_result.computo.voci
+        totale_quantita = parser_result.computo.totale_quantita
+        totale_importo = parser_result.computo.totale_importo
 
         # Validazione file MC
         validation_warnings = self._validate_mc_return_file(
             mc_base_voci,
-            parser_result.voci,
+            ritorno_voci,
         )
 
         # Statistiche
-        description_price_map = _build_description_price_map(parser_result.voci)
-        ritorno_con_progressivi = _has_progressivi(parser_result.voci)
+        description_price_map = _build_description_price_map(ritorno_voci)
+        ritorno_con_progressivi = _has_progressivi(ritorno_voci)
 
         mc_quantita_totale = _sum_project_quantities(mc_base_voci)
         excel_quantita_totale = (
-            Decimal(str(parser_result.totale_quantita))
-            if parser_result.totale_quantita is not None
+            Decimal(str(totale_quantita))
+            if totale_quantita is not None
             else None
         )
         ritorno_quantita_totale = (
             excel_quantita_totale
             if excel_quantita_totale is not None
-            else sum(Decimal(str(voce.quantita or 0)) for voce in parser_result.voci)
+            else sum(Decimal(str(voce.quantita or 0)) for voce in ritorno_voci)
         )
         mc_quantita_float = float(mc_quantita_totale or 0)
         ritorno_quantita_float = float(ritorno_quantita_totale or 0)
@@ -301,7 +310,7 @@ class McImportService(BaseImportService):
         # Alignment: match progressivi del ritorno con voci progetto
         alignment = _align_return_rows(
             mc_base_voci,
-            parser_result.voci,
+            ritorno_voci,
             prefer_progressivi=ritorno_con_progressivi,
             description_price_map=description_price_map,
         )
@@ -430,7 +439,7 @@ class McImportService(BaseImportService):
                 warning_message = extra_warning
 
         if ritorno_con_progressivi:
-            duplicate_progressivi = _detect_duplicate_progressivi(parser_result.voci)
+            duplicate_progressivi = _detect_duplicate_progressivi(ritorno_voci)
             if duplicate_progressivi:
                 dup_summary = ", ".join(duplicate_progressivi[:5])
                 if len(duplicate_progressivi) > 5:
@@ -472,8 +481,8 @@ class McImportService(BaseImportService):
             )
             total_import = float(computed_total)
 
-        if parser_result.totale_importo is not None:
-            excel_total = Decimal(str(parser_result.totale_importo)).quantize(
+        if totale_importo is not None:
+            excel_total = Decimal(str(totale_importo)).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
             if computed_total is None or abs(excel_total - computed_total) <= Decimal("0.01"):

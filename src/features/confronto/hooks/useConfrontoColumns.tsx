@@ -137,6 +137,18 @@ export function useConfrontoColumns({
         headerClass: "text-[11px] uppercase tracking-wide text-muted-foreground",
         children: [
           {
+            headerName: "Q.tà",
+            field: `${fieldPrefix}_quantita`,
+            width: 110,
+            type: "numericColumn",
+            valueFormatter: (params) =>
+              params.value != null ? (params.value as number).toFixed(2) : "-",
+            cellStyle: {
+              backgroundColor: color.bg,
+              borderLeft: `2px solid ${color.border}`,
+            },
+          },
+          {
             headerName: "P.U.",
             field: `${fieldPrefix}_prezzoUnitario`,
             width: 120,
@@ -233,6 +245,58 @@ export function useConfrontoColumns({
                 );
               }
               return val;
+            },
+          },
+          {
+            headerName: "Δ Q.tà",
+            field: `${fieldPrefix}_deltaQuantita`,
+            width: 110,
+            type: "numericColumn",
+            cellRenderer: (params: any) => {
+              if (params.value == null) return "-";
+              const val = params.value as number;
+              const isPositive = val > 0;
+              const isNegative = val < 0;
+              const colorVal = isPositive
+                ? isDarkMode ? "#ef4444" : "#dc2626"
+                : isNegative
+                  ? isDarkMode ? "#22c55e" : "#16a34a"
+                  : isDarkMode ? "#94a3b8" : "#64748b";
+              const bg = isPositive
+                ? isDarkMode ? "rgba(127, 29, 29, 0.2)" : "#fef2f2"
+                : isNegative
+                  ? isDarkMode ? "rgba(20, 83, 45, 0.2)" : "#f0fdf4"
+                  : "transparent";
+              const border = isPositive
+                ? isDarkMode ? "rgba(248, 113, 113, 0.3)" : "#fecaca"
+                : isNegative
+                  ? isDarkMode ? "rgba(74, 222, 128, 0.3)" : "#bbf7d0"
+                  : "transparent";
+              const text = `${val >= 0 ? "+" : ""}${val.toFixed(2)}`;
+              const arrow = isPositive ? "↑" : isNegative ? "↓" : "";
+
+              return (
+                <div style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "flex-end",
+                  gap: "4px",
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  backgroundColor: bg,
+                  color: colorVal,
+                  border: `1px solid ${border}`,
+                  fontWeight: 600,
+                  fontSize: "11px",
+                  width: "100%",
+                }}>
+                  <span>{arrow}</span>
+                  <span>{text}</span>
+                </div>
+              );
+            },
+            cellStyle: {
+              backgroundColor: color.bg,
             },
           },
           {
