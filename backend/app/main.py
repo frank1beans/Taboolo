@@ -60,25 +60,30 @@ async def lifespan(app: FastAPI):
     # Inizializza DB (creazione tabelle / migrazioni leggere)
     init_db()
 
-    # Applica configurazione NLP se presente
-    try:
-        with Session(engine) as session:
-            settings_row = session.query(SettingsModel).first()
-            if settings_row:
-                semantic_embedding_service.configure(
-                    model_id=settings_row.nlp_model_id,
-                    max_length=settings_row.nlp_max_length,
-                    batch_size=settings_row.nlp_batch_size,
-                )
-    except Exception as exc:  # pragma: no cover - avvio best-effort
-        logger.warning("Impossibile applicare la configurazione NLP: %s", exc)
+    # LAZY LOADING: Non carichiamo più il modello NLP all'avvio.
+    # Il modello verrà caricato automaticamente al primo utilizzo (lazy initialization).
+    # Questo riduce drasticamente i tempi di startup e il consumo di memoria.
+    #
+    # La configurazione NLP viene comunque letta dal DB e applicata quando necessario.
+    # Se in futuro servisse pre-caricare il modello, decommentare il codice sotto.
 
-    # Inizializza modello e prototipi proprietà
-    try:
-        init_property_model()
-        init_property_prototypes()
-    except Exception as exc:  # pragma: no cover - avvio best-effort
-        logger.warning("Impossibile inizializzare il resolver proprietà: %s", exc)
+    # try:
+    #     with Session(engine) as session:
+    #         settings_row = session.query(SettingsModel).first()
+    #         if settings_row:
+    #             semantic_embedding_service.configure(
+    #                 model_id=settings_row.nlp_model_id,
+    #                 max_length=settings_row.nlp_max_length,
+    #                 batch_size=settings_row.nlp_batch_size,
+    #             )
+    # except Exception as exc:  # pragma: no cover - avvio best-effort
+    #     logger.warning("Impossibile applicare la configurazione NLP: %s", exc)
+
+    # try:
+    #     init_property_model()
+    #     init_property_prototypes()
+    # except Exception as exc:  # pragma: no cover - avvio best-effort
+    #     logger.warning("Impossibile inizializzare il resolver proprietà: %s", exc)
 
     # Qui l'app è pronta a ricevere richieste
     yield

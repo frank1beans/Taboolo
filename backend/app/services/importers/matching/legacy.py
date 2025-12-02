@@ -103,6 +103,7 @@ def _align_progressive_return(
                 quant_from_match,
                 import_from_match,
             ) = _price_bundle(match)
+
             zero_guard_price_input = price_from_match
             zero_guard_quant_input = quant_from_match
             zero_guard_import_input = import_from_match
@@ -162,12 +163,24 @@ def _align_progressive_return(
             prezzo_unitario,
             importo,
         )
+
         if match is None:
-            parsed_voce.quantita = 0.0
-            parsed_voce.importo = 0.0
-            meta = dict(parsed_voce.metadata or {})
-            meta["missing_from_return"] = True
-            parsed_voce.metadata = meta
+            # FIX: In MC con progressivi, se il match fallisce mantieni i dati del progetto
+            # invece di resettare a 0. Il progetto potrebbe avere dati validi anche se
+            # il ritorno non ha quella voce specificamente.
+            # Solo se anche i dati del progetto sono 0, allora marca come missing.
+            if parsed_voce.quantita in (None, 0, 0.0) and parsed_voce.importo in (None, 0, 0.0):
+                parsed_voce.quantita = 0.0
+                parsed_voce.importo = 0.0
+                meta = dict(parsed_voce.metadata or {})
+                meta["missing_from_return"] = True
+                parsed_voce.metadata = meta
+            else:
+                # Mantieni i dati del progetto
+                meta = dict(parsed_voce.metadata or {})
+                meta["missing_from_return"] = True
+                meta["used_project_fallback"] = True
+                parsed_voce.metadata = meta
 
         if enforce_zero and match:
             zero_guard_inputs.append(
@@ -835,12 +848,16 @@ def _match_price_list_item_entry(
     tail_signature_map: dict[str, list[PriceListItem]],
     embedding_map: dict[str, list[tuple[PriceListItem, list[float]]]],
 ) -> PriceListItem | None:
+    # FIX: Se esiste un codice, usa SOLO il match per codice.
+    # Il match per descrizione deve essere usato SOLO quando non c'è codice.
     code_token = _normalize_code_token(parsed.codice)
     if code_token:
         candidates = code_map.get(code_token, [])
         candidate = _select_price_list_item_candidate(candidates, parsed)
         if candidate:
             return candidate
+        # Se c'è un codice ma non trova match, non fare fallback a descrizione
+        return None
 
     signature = _description_signature_from_parsed(parsed)
     if signature:
@@ -1300,12 +1317,12 @@ def _pick_match(
     """
     Versione ottimizzata: usa token pre-calcolati e limita il numero di candidati.
     """
-
     project_wbs_key = None
     project_base_key = None
     if voce_progetto:
         project_wbs_key = _wbs_key_from_model(voce_progetto)
         project_base_key = _base_wbs_key_from_key(project_wbs_key)
+
         if project_base_key:
             wbs_bucket = index.get(f"__wbs__:{project_base_key}")
             voce_wbs = _claim_wbs_bucket(wbs_bucket, voce_progetto)
@@ -1341,15 +1358,18 @@ def _pick_match(
     # 2) Candidati da keys (ma evitando duplicati)
     candidates: list[dict[str, Any]] = []
     seen_wrappers: set[int] = set()
+
     for key in keys:
         if len(key) < 4:
             continue
         bucket = index.get(key)
         if not bucket:
             continue
+
         for wrapper in bucket:
             base_scope = wrapper.get("base_key")
             allow_cross_wbs = key.startswith("progressivo")
+
             if (
                 base_scope
                 and project_base_key
@@ -1378,6 +1398,23 @@ def _pick_match(
 
     if not candidates:
         return None
+
+    # FIX CRITICO: Se c'è un candidato trovato tramite progressivo, usalo direttamente
+    # senza applicare filtri di descrizione. Il progressivo è un match ESATTO.
+    progressivo_candidate = None
+    for wrapper in candidates:
+        voce_cand = wrapper.get("voce")
+        if voce_cand and hasattr(voce_cand, 'progressivo'):
+            if voce_progetto and voce_cand.progressivo == voce_progetto.progressivo:
+                if not wrapper.get("used"):
+                    progressivo_candidate = wrapper
+                    break
+
+    if progressivo_candidate:
+        voce = progressivo_candidate["voce"]
+        progressivo_candidate["matched"] = True
+        progressivo_candidate["used"] = True
+        return voce
 
     project_tokens = _descr_tokens(
         voce_progetto.descrizione if voce_progetto else None
